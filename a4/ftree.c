@@ -6,16 +6,13 @@
 #include <arpa/inet.h>
 #include "ftree.h"
 
-int rcopy_client(char *source, char *host, unsigned short port){
-  int soc;
-  char *message = malloc(strlen(source) + 3);
-  strncpy(message, source, strlen(source));
-  strcat(message, "\r\n");
+/* 
+ * Establishes connection for client to server
+ */
+int establish_connection(int *soc, char *host, unsigned short port){
   struct sockaddr_in peer;
 
-  int current_byte, bytes_left, total_bytes, howmany;
-
-  if ((soc = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+  if ((*soc = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
     perror("randclient: socket");
     exit(1);
   }
@@ -24,14 +21,23 @@ int rcopy_client(char *source, char *host, unsigned short port){
   peer.sin_port = htons(port);
   if (inet_pton(AF_INET, host, &peer.sin_addr) < 1) {
     perror("randclient: inet_pton");
-    close(soc);
+    close(*soc);
     exit(1);
   }
 
-  if (connect(soc, (struct sockaddr *)&peer, sizeof(peer)) == -1) {
+  if (connect(*soc, (struct sockaddr *)&peer, sizeof(peer)) == -1) {
     perror("randclient: connect");
     exit(1);
   }
+}
+
+int rcopy_client(char *source, char *host, unsigned short port){
+  int soc;
+  char *message = malloc(strlen(source) + 3);
+  strncpy(message, source, strlen(source));
+  strcat(message, "\r\n");
+  
+  establish_connection(&soc, host, port);
 
   write(soc, message, strlen(message));
 
@@ -39,6 +45,9 @@ int rcopy_client(char *source, char *host, unsigned short port){
   return 0;
 }
 
+/* 
+ * Helper to setup server
+ */
 int setup(unsigned short port) {
   int on = 1, status;
   struct sockaddr_in self;
