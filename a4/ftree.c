@@ -8,7 +8,9 @@
 
 int rcopy_client(char *source, char *host, unsigned short port){
   int soc;
-  char message[18] = "A stitch in time\r\n";
+  char *message = malloc(strlen(source) + 3);
+  strncpy(message, source, strlen(source));
+  strcat(message, "\r\n");
   struct sockaddr_in peer;
 
   int current_byte, bytes_left, total_bytes, howmany;
