@@ -91,7 +91,6 @@ void rcopy_server(unsigned short port){
   int inbuf; // how many bytes currently in buffer?
   int room; // how much room left in buffer?
   char *after; // pointer to position after the (valid) data in buf
-  int where; // location of network newline
 
   struct sockaddr_in peer;
   socklen_t socklen;
