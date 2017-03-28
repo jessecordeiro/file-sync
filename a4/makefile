@@ -1,13 +1,17 @@
 PORT=57021
 FLAGS = -DPORT=$(PORT) -g -Wall -std=gnu99
+DEPENDENCIES = hash.h ftree.h
 
-all: rcopy_client rcopy_server
+all: rcopy_server rcopy_client
 
-rcopy_client: rcopy_client.o
-	gcc ${FLAGS} -o $@ rcopy_client.o
+rcopy_server: rcopy_server.o ftree.o
+	gcc ${FLAGS} -o $@ $^
 
-rcopy_server: rcopy_server.o
-	gcc ${FLAGS} -o $@ rcopy_server.o
+rcopy_client: rcopy_client.o ftree.o
+	gcc ${FLAGS} -o $@ $^
+
+%.o: %.c {DEPENDENCIES}
+	gcc ${FLAGS} -o $@ $<
 
 clean:
-	rm *.o rcopy_client rcopy_server
+	rm *.o rcopy_server rcopy_client

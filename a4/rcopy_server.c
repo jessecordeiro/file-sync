@@ -3,6 +3,7 @@
 #include <libgen.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 #include <errno.h>
 
 #include "ftree.h"
