@@ -183,9 +183,9 @@ int trace_directory(char *source, int soc){
 int rcopy_client(char *source, char *host, unsigned short port){
 	int soc, nl_type, nl_mode, nl_size, pid;
 	struct request *file;
-	char *message = malloc(strlen(source) + 3);
-	strncpy(message, source, strlen(source));
-	strcat(message, "\r\n");
+	// char *message = malloc(strlen(source) + 3);
+	// strncpy(message, source, strlen(source));
+	// strcat(message, "\r\n");
 
 	establish_connection(&soc, host, port);
 
