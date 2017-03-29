@@ -10,6 +10,65 @@
 #include "hash.h"
 
 
+int handle_regular_file(struct request *filesrc){
+	struct stat fstats_dest;
+	char *destpath = malloc(strlen(filesrc->path) + 1);
+	destpath[0] = '\0';
+	strcat(destpath, filesrc->path);
+
+	// File/dir already exists in destination
+	if (lstat(destpath, &fstats_dest) != -1 && S_ISREG(fstats_dest.st_mode)){
+
+		// If file sizes are consistent, compare hash to determine
+		// if file should be overwritten
+		if (fstats_dest.st_size == filesrc->size){
+			FILE *filedest;
+			filedest = fopen(destpath, "rb");
+
+			// Emit error if there is a type mismatch
+			if (filedest == NULL){
+	    		perror("fopen");
+	    		return ERROR;
+	    	}else{
+
+	    		char hashdest[BLOCKSIZE];
+	    		strcpy(hashdest, hash(hashdest, filedest));
+	    		fclose(filedest);
+
+	    		// If hash is not the same, file in src has changed
+	    		// and must be rewritten to destination
+	    		if (check_hash(filesrc->hash, hashdest) != 0){
+	    			return SENDFILE;
+	    		}
+	    		return OK;
+	    	}
+
+	    // If size differs, copy is performed
+		}else{
+			// Copy file contents to destination
+			return SENDFILE;
+
+		} // End of file size comparison
+
+		// If file permissions in src differ from destination,
+		// update the destination's permissions
+		int permissionsrc = (filesrc->mode & 0777);
+		int permissiondest = (fstats_dest.st_mode & 0777);
+		if (permissionsrc != permissiondest){
+			if (chmod(destpath, permissionsrc) != 0){
+				perror("chmod");
+			}
+
+		}
+
+	// Create file since it does not already exist in source
+	}else if (lstat(destpath, &fstats_dest) == -1){
+		return SENDFILE;
+	}else{
+		return ERROR;
+	}
+}
+
 struct request *fill_struct(struct stat fstats, char *src, int type){
 	FILE *filesrc;
 	struct request *file = malloc(sizeof(struct request));
@@ -62,7 +121,7 @@ int establish_connection(int *soc, char *host, unsigned short port){
 }
 
 int rcopy_client(char *source, char *host, unsigned short port){
-	int soc, nl_type, nl_mode, nl_size;
+	int soc, nl_type, nl_mode, nl_size, response;
 	struct request *file;
 	char *message = malloc(strlen(source) + 3);
 	strncpy(message, source, strlen(source));
@@ -80,6 +139,9 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	write(soc, &nl_mode, sizeof(mode_t));
 	write(soc, file->hash, BLOCKSIZE);
 	write(soc, &nl_size, sizeof(int));
+
+	read(soc, &response, sizeof(int));
+	printf("RESPONSE FROM SERVER: %d\n", response);
 	free(file);
 	close(soc);
 	return 0;
@@ -143,6 +205,7 @@ void rcopy_server(unsigned short port){
 			struct request *file = malloc(sizeof(struct request));
 			int type, nl_mode, size;
 			char path[MAXPATH];
+			int response;
 
 			// Read from client to fill request struct
 			read(fd, &type, sizeof(int));
@@ -154,10 +217,15 @@ void rcopy_server(unsigned short port){
 			read(fd, &size, sizeof(mode_t));
 			file->size = ntohl(size);
 
-			printf("File type: %d\n", file->type);
-			printf("File path: %s\n", file->path);
-			printf("File mode: %d\n", file->mode);
-			printf("File size: %d bytes\n", file->size);
+			// printf("File type: %d\n", file->type);
+			// printf("File path: %s\n", file->path);
+			// printf("File mode: %d\n", file->mode);
+			// printf("File size: %d bytes\n", file->size);
+
+			if (file->type == REGFILE){
+				response = handle_regular_file(file);
+				write(fd, &response, sizeof(int));
+			}
 		}
 		close(fd);
 	}
