@@ -11,14 +11,18 @@
 
 
 struct request *fill_struct(struct stat fstats, char *src, int type){
+	FILE *filesrc;
 	struct request *file = malloc(sizeof(struct request));
 	file->type = type;
 	strcpy(file->path, src);
 	file->mode = fstats.st_mode;
 	file->size = fstats.st_size;
-
-	// Missing: compute hash
-
+    filesrc = fopen(src, "r");
+	if (filesrc == NULL){
+	    perror("fopen");
+	}else{
+		strcpy(file->hash, hash(file->hash, filesrc));
+	}
 	return file;
 }
 
@@ -74,9 +78,9 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	write(soc, &nl_type, sizeof(int));
 	write(soc, file->path, MAXPATH);
 	write(soc, &nl_mode, sizeof(mode_t));
-	// Missing: Transmit hash
+	write(soc, file->hash, BLOCKSIZE);
 	write(soc, &nl_size, sizeof(int));
-
+	free(file);
 	close(soc);
 	return 0;
 }
@@ -121,12 +125,7 @@ int setup(unsigned short port) {
 }
 
 void rcopy_server(unsigned short port){
-	int listenfd;
-	int fd, nbytes;
-	int inbuf; // how many bytes currently in buffer?
-	int room; // how much room left in buffer?
-	char *after; // pointer to position after the (valid) data in buf
-
+	int listenfd, fd;
 	struct sockaddr_in peer;
 	socklen_t socklen;
 
@@ -141,27 +140,24 @@ void rcopy_server(unsigned short port){
 
 		} else {
 			printf("New connection on port %d\n", ntohs(peer.sin_port));
+			struct request *file = malloc(sizeof(struct request));
 			int type, nl_mode, size;
 			char path[MAXPATH];
-			mode_t mode;
 
-			// Pointer to modify path name for read call
-			after = path;        // start writing at beginning of path
-
+			// Read from client to fill request struct
 			read(fd, &type, sizeof(int));
-			type = ntohl(type);
-			read(fd, after, MAXPATH);
+			file->type = ntohl(type);
+			read(fd, &(file->path), MAXPATH);
 			read(fd, &nl_mode, sizeof(mode_t));
-			mode = (mode_t) ntohl(nl_mode);
-			// Missing: read hash
+			file->mode = (mode_t) ntohl(nl_mode);
+			read(fd, &(file->hash), BLOCKSIZE);
 			read(fd, &size, sizeof(mode_t));
-			size = ntohl(size);
+			file->size = ntohl(size);
 
-			printf("File type: %d\n", type);
-			printf("File path: %s\n", path);
-			printf("File mode: %d\n", mode);
-			// Missing: print hash
-			printf("File size: %d bytes\n", size);
+			printf("File type: %d\n", file->type);
+			printf("File path: %s\n", file->path);
+			printf("File mode: %d\n", file->mode);
+			printf("File size: %d bytes\n", file->size);
 		}
 		close(fd);
 	}
