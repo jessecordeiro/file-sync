@@ -24,7 +24,7 @@
 #define ERROR 2
 
 #ifndef PORT
-    #define PORT 30100
+    #define PORT 57021
 #endif
 
 struct request {
