@@ -297,7 +297,6 @@ void rcopy_server(unsigned short port){
 
 
 	    if (FD_ISSET(fd, &listen_fds)){
-		    printf("%s\n", "iteration");
 			struct request *file = malloc(sizeof(struct request));
 			int type, nl_mode, size;
 			char path[MAXPATH];
