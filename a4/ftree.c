@@ -4,11 +4,33 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <netdb.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include "ftree.h"
+#include "hash.h"
 
 
+struct request *fill_struct(struct stat fstats, char *src, int type){
+	struct request *file = malloc(sizeof(struct request));
+	file->type = type;
+	strcpy(file->path, src);
+	file->mode = fstats.st_mode;
+	file->size = fstats.st_size;
 
+	// Missing: compute hash
+
+	return file;
+}
+
+struct request *handle_copy(char *src){
+	struct stat fstats;
+	lstat(src, &fstats);
+
+	// Omit regular files beginning with "."
+	if (S_ISREG(fstats.st_mode) && src[0] != '.') {
+		return fill_struct(fstats, src, REGFILE);
+	}
+}
 
 /* 
  * Establishes connection for client to server
@@ -36,14 +58,24 @@ int establish_connection(int *soc, char *host, unsigned short port){
 }
 
 int rcopy_client(char *source, char *host, unsigned short port){
-	int soc;
+	int soc, nl_type, nl_mode, nl_size;
+	struct request *file;
 	char *message = malloc(strlen(source) + 3);
 	strncpy(message, source, strlen(source));
 	strcat(message, "\r\n");
 
 	establish_connection(&soc, host, port);
 
-	write(soc, message, strlen(message));
+	file = handle_copy(basename(source));
+	nl_type = htonl(file->type);
+	nl_mode = htonl(file->mode);
+	nl_size = htonl(file->size);
+
+	write(soc, &nl_type, sizeof(int));
+	write(soc, file->path, MAXPATH);
+	write(soc, &nl_mode, sizeof(mode_t));
+	// Missing: Transmit hash
+	write(soc, &nl_size, sizeof(int));
 
 	close(soc);
 	return 0;
@@ -91,7 +123,6 @@ int setup(unsigned short port) {
 void rcopy_server(unsigned short port){
 	int listenfd;
 	int fd, nbytes;
-	char buf[30];
 	int inbuf; // how many bytes currently in buffer?
 	int room; // how much room left in buffer?
 	char *after; // pointer to position after the (valid) data in buf
@@ -110,16 +141,27 @@ void rcopy_server(unsigned short port){
 
 		} else {
 			printf("New connection on port %d\n", ntohs(peer.sin_port));
+			int type, nl_mode, size;
+			char path[MAXPATH];
+			mode_t mode;
 
-			// Receive messages
-			inbuf = 0;          // buffer is empty; has no bytes
-			room = sizeof(buf); // room == capacity of the whole buffer
-			after = buf;        // start writing at beginning of buf
+			// Pointer to modify path name for read call
+			after = path;        // start writing at beginning of path
 
-			nbytes = read(fd, after, room);
+			read(fd, &type, sizeof(int));
+			type = ntohl(type);
+			read(fd, after, MAXPATH);
+			read(fd, &nl_mode, sizeof(mode_t));
+			mode = (mode_t) ntohl(nl_mode);
+			// Missing: read hash
+			read(fd, &size, sizeof(mode_t));
+			size = ntohl(size);
 
-			printf("Next message: %s", buf);
-
+			printf("File type: %d\n", type);
+			printf("File path: %s\n", path);
+			printf("File mode: %d\n", mode);
+			// Missing: print hash
+			printf("File size: %d bytes\n", size);
 		}
 		close(fd);
 	}
