@@ -18,7 +18,7 @@ int handle_file(struct request *filesrc){
 	strcat(destpath, filesrc->path);
 
 	// File/dir already exists in destination
-	if (lstat(destpath, &fstats_dest) != -1 && S_ISREG(fstats_dest.st_mode)){
+	if (lstat(destpath, &fstats_dest) != -1){
 
 		// If file sizes are consistent, compare hash to determine
 		// if file should be overwritten
