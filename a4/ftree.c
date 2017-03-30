@@ -145,7 +145,7 @@ int transmit_struct(int soc, struct request *file){
 
 	read(soc, &response, sizeof(int));
 	printf("RESPONSE FROM SERVER: %d\n", response);
-	if (response == SENDFILE) {
+	if (response == SENDFILE && S_ISREG(file->mode)) {
 		char contents[MAXDATA];
         	FILE *fp = fopen(file->path, "r");
 		fread(contents, 1, MAXDATA, fp);
@@ -357,12 +357,16 @@ void rcopy_server(unsigned short port){
 					state = AWAITING_TYPE;
 				}
 			} else if (state == AWAITING_DATA) {
-				FILE *fp = fopen(file->path, "w");
-				char contents[MAXDATA];
-				read(client_fd, &contents, file->size);
-				contents[file->size] = '\0';
-				fwrite(contents, 1, file->size, fp);
-				fclose(fp);
+				if (S_ISREG(file->mode)) {
+					FILE *fp = fopen(file->path, "w");
+					char contents[MAXDATA];
+					read(client_fd, &contents, file->size);
+					contents[file->size] = '\0';
+					fwrite(contents, 1, file->size, fp);
+					fclose(fp);
+				} else if (S_ISDIR(file->mode)) {
+					mkdir(file->path, file->mode);
+				}
 				state = AWAITING_TYPE;
 			}
 	    }
