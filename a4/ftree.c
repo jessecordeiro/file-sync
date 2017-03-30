@@ -179,12 +179,12 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			char data;
 			establish_connection(&soc_child, host, port);
 
-			// int request_type = TRANSFILE;
-			// write(soc_child, &request_type, sizeof(int));
-			// write(soc_child, file->path, MAXPATH);
-			// write(soc_child, &nl_mode, sizeof(mode_t));
-			// write(soc_child, file->hash, BLOCKSIZE);
-			// write(soc_child, &nl_size, sizeof(int));
+			int request_type = TRANSFILE;
+			write(soc_child, &request_type, sizeof(int));
+			write(soc_child, file->path, MAXPATH);
+			write(soc_child, &nl_mode, sizeof(mode_t));
+			write(soc_child, file->hash, BLOCKSIZE);
+			write(soc_child, &nl_size, sizeof(int));
 
 			// Write file contents to server
 			char contents[MAXDATA];
@@ -402,7 +402,11 @@ void rcopy_server(unsigned short port){
 							// Tell client that file should be sent as it does not
 							// exist on the server.
 							write(files[i].sock_fd, &response, sizeof(int));
-							files[i].state = AWAITING_DATA;
+							if (files[i].type == TRANSFILE) {
+								files[i].state = AWAITING_DATA;
+							} else {
+								files[i].state = AWAITING_TYPE;
+							}
 						}else{
 
 							// If file does exist on the server, the client has
