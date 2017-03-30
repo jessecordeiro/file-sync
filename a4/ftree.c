@@ -130,7 +130,6 @@ int establish_connection(int *soc, char *host, unsigned short port){
 }
 
 int transmit_struct(int soc, struct request *file){
-	printf("%s\n", "transmit");
 	int response, nl_type, nl_mode, nl_size;
 	nl_type = htonl(file->type);
 	nl_mode = htonl(file->mode);
@@ -212,7 +211,7 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	// 		write(soc_child, &nl_mode, sizeof(mode_t));
 	// 		write(soc_child, file->hash, BLOCKSIZE);
 	// 		write(soc_child, &nl_size, sizeof(int));
-	// 		printf("%s\n", "testing123");
+
 	// 	}
 	// }
 	free(file);
@@ -260,7 +259,11 @@ int setup(unsigned short port) {
 }
 
 void rcopy_server(unsigned short port){
+	struct request *file;
 	int listenfd, fd;
+	int type, nl_mode, size;
+	int state = AWAITING_TYPE;
+	int response;
 	struct sockaddr_in peer;
 	fd_set all_fds, listen_fds;
 	socklen_t socklen;
@@ -297,34 +300,48 @@ void rcopy_server(unsigned short port){
 
 
 	    if (FD_ISSET(fd, &listen_fds)){
-			struct request *file = malloc(sizeof(struct request));
-			int type, nl_mode, size;
-			char path[MAXPATH];
-			int response;
+	    	if (state == AWAITING_TYPE){
+	    		file = malloc(sizeof(struct request));
+				char path[MAXPATH];
 
-			// Read from client to fill request struct
-			read(fd, &type, sizeof(int));
-			file->type = ntohl(type);
-			read(fd, &(file->path), MAXPATH);
-			read(fd, &nl_mode, sizeof(mode_t));
-			file->mode = (mode_t) ntohl(nl_mode);
-			if (S_ISREG(file->mode)){
+				// Read from client to fill request struct
+				read(fd, &type, sizeof(int));
+				file->type = ntohl(type);
+				state = AWAITING_PATH;
+	    	} else if (state == AWAITING_PATH){
+				read(fd, &(file->path), MAXPATH);
+				state = AWAITING_PERM;
+			} else if (state == AWAITING_PERM){
+				read(fd, &nl_mode, sizeof(mode_t));
+				file->mode = (mode_t) ntohl(nl_mode);
+
+				// omit hash if we are dealing with a directory
+				if (S_ISREG(file->mode)){
+					state = AWAITING_HASH;
+				}else {
+					state = AWAITING_SIZE;
+				}
+			}else if (state == AWAITING_HASH){
 				read(fd, &(file->hash), BLOCKSIZE);
-			}
-			read(fd, &size, sizeof(mode_t));
-			file->size = ntohl(size);
+				state = AWAITING_SIZE;
+			} else if (state == AWAITING_SIZE){
+				read(fd, &size, sizeof(int));
+				file->size = ntohl(size);
 
-			printf("File type: %d\n", file->type);
-			printf("File path: %s\n", file->path);
-			printf("File mode: %d\n", file->mode);
-			printf("File size: %d bytes\n", file->size);
+				printf("File type: %d\n", file->type);
+				printf("File path: %s\n", file->path);
+				printf("File mode: %d\n", file->mode);
+				printf("File size: %d bytes\n", file->size);
 
-			if (S_ISREG(file->mode)){
-				response = handle_file(file);
-				write(fd, &response, sizeof(int));
-			} else if (S_ISDIR(file->mode)){
-				response = handle_file(file);
-				write(fd, &response, sizeof(int));
+				if (S_ISREG(file->mode)){
+					response = handle_file(file);
+					write(fd, &response, sizeof(int));
+				} else if (S_ISDIR(file->mode)){
+					response = handle_file(file);
+					write(fd, &response, sizeof(int));
+				}
+				// this should be awaiting data, but we haven't implemented this state yet
+				state = AWAITING_TYPE;
 			}
 	    }
 	}
