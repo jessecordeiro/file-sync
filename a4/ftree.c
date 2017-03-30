@@ -145,6 +145,13 @@ int transmit_struct(int soc, struct request *file){
 
 	read(soc, &response, sizeof(int));
 	printf("RESPONSE FROM SERVER: %d\n", response);
+	if (response == SENDFILE) {
+		char contents[MAXDATA];
+        	FILE *fp = fopen(file->path, "r");
+		fread(contents, 1, MAXDATA, fp);
+        	write(soc, contents, file->size);
+		fclose(fp);
+	}
 }
 
 int trace_directory(char *source, int soc){
@@ -344,6 +351,18 @@ void rcopy_server(unsigned short port){
 					write(client_fd, &response, sizeof(int));
 				}
 				// this should be awaiting data, but we haven't implemented this state yet
+				if (response == SENDFILE) {
+					state = AWAITING_DATA;
+				} else {
+					state = AWAITING_TYPE;
+				}
+			} else if (state == AWAITING_DATA) {
+				FILE *fp = fopen(file->path, "w");
+				char contents[MAXDATA];
+				read(client_fd, &contents, file->size);
+				contents[file->size] = '\0';
+				fwrite(contents, 1, file->size, fp);
+				fclose(fp);
 				state = AWAITING_TYPE;
 			}
 	    }
