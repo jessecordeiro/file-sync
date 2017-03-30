@@ -179,7 +179,7 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			char data;
 			establish_connection(&soc_child, host, port);
 
-			int request_type = TRANSFILE;
+			int request_type = htonl(TRANSFILE);
 			write(soc_child, &request_type, sizeof(int));
 			write(soc_child, file->path, MAXPATH);
 			write(soc_child, &nl_mode, sizeof(mode_t));
@@ -373,6 +373,8 @@ void rcopy_server(unsigned short port){
 		    	} else if (files[i].state == AWAITING_PATH){
 					read(files[i].sock_fd, &(files[i].path), MAXPATH);
 					files[i].state = AWAITING_PERM;
+					// printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
+
 				} else if (files[i].state == AWAITING_PERM){
 					read(files[i].sock_fd, &nl_mode, sizeof(int));
 					files[i].mode = (mode_t) ntohl(nl_mode);
