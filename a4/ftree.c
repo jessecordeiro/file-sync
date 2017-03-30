@@ -225,15 +225,15 @@ int rcopy_client(char *source, char *host, unsigned short port){
 int setup(unsigned short port) {
 	int on = 1, status;
 	struct sockaddr_in self;
-	int listenfd;
-	if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+	int socket_fd;
+	if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
 		perror("socket");
 		exit(1);
 	}
 
 	// Make sure we can reuse the port immediately after the
 	// server terminates.
-	status = setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR,
+	status = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR,
 	                  (const char *) &on, sizeof(on));
 	if(status == -1) {
 		perror("setsockopt -- REUSEADDR");
@@ -246,21 +246,21 @@ int setup(unsigned short port) {
 
 	printf("Listening on %d\n", port);
 
-	if (bind(listenfd, (struct sockaddr *)&self, sizeof(self)) == -1) {
+	if (bind(socket_fd, (struct sockaddr *)&self, sizeof(self)) == -1) {
 		perror("bind"); // probably means port is in use
 		exit(1);
 	}
 
-	if (listen(listenfd, 5) == -1) {
+	if (listen(socket_fd, 5) == -1) {
 		perror("listen");
 		exit(1);
 	}
-	return listenfd;
+	return socket_fd;
 }
 
 void rcopy_server(unsigned short port){
 	struct request *file;
-	int listenfd, fd;
+	int socket_fd, client_fd;
 	int type, nl_mode, size;
 	int state = AWAITING_TYPE;
 	int response;
@@ -268,10 +268,10 @@ void rcopy_server(unsigned short port){
 	fd_set all_fds, listen_fds;
 	socklen_t socklen;
 
-	listenfd = setup(port);
-	int max_fd = listenfd;
+	socket_fd = setup(port);
+	int max_fd = socket_fd;
 	FD_ZERO(&all_fds);
-	FD_SET(listenfd, &all_fds);
+	FD_SET(socket_fd, &all_fds);
 
 	while (1) {
 		listen_fds = all_fds;
@@ -285,47 +285,50 @@ void rcopy_server(unsigned short port){
 	    // Note that we're passing in valid pointers for the second and third
 	    // arguments to accept here, so we can actually store and use client
 	    // information.
-	    if (FD_ISSET(listenfd, &listen_fds)){
-	    	if ((fd = accept(listenfd, (struct sockaddr *)&peer, &socklen)) < 0) {
+	    if (FD_ISSET(socket_fd, &listen_fds)){
+	    	if ((client_fd = accept(socket_fd, (struct sockaddr *)&peer, &socklen)) < 0) {
 				perror("accept");
 			}else{
 				printf("New connection on port %d\n", ntohs(peer.sin_port));
-				FD_SET(fd, &all_fds);
+				FD_SET(client_fd, &all_fds);
 
-				if (fd > max_fd) {
-                max_fd = fd;
+				if (client_fd > max_fd) {
+                max_fd = client_fd;
             	}
 			}
 	    }
 
 
-	    if (FD_ISSET(fd, &listen_fds)){
+	    if (FD_ISSET(client_fd, &listen_fds)){
 	    	if (state == AWAITING_TYPE){
 	    		file = malloc(sizeof(struct request));
 				char path[MAXPATH];
 
-				// Read from client to fill request struct
-				read(fd, &type, sizeof(int));
+				// Sanity check to determine if client_fd needs to be removed
+				if (read(client_fd, &type, sizeof(int)) == 0){
+					FD_CLR(client_fd, &all_fds);
+					state = AWAITING_TYPE;
+				}
 				file->type = ntohl(type);
 				state = AWAITING_PATH;
 	    	} else if (state == AWAITING_PATH){
-				read(fd, &(file->path), MAXPATH);
+				read(client_fd, &(file->path), MAXPATH);
 				state = AWAITING_PERM;
 			} else if (state == AWAITING_PERM){
-				read(fd, &nl_mode, sizeof(mode_t));
+				read(client_fd, &nl_mode, sizeof(mode_t));
 				file->mode = (mode_t) ntohl(nl_mode);
 
-				// omit hash if we are dealing with a directory
+				// omit hash state if we are dealing with a directory
 				if (S_ISREG(file->mode)){
 					state = AWAITING_HASH;
 				}else {
 					state = AWAITING_SIZE;
 				}
 			}else if (state == AWAITING_HASH){
-				read(fd, &(file->hash), BLOCKSIZE);
+				read(client_fd, &(file->hash), BLOCKSIZE);
 				state = AWAITING_SIZE;
 			} else if (state == AWAITING_SIZE){
-				read(fd, &size, sizeof(int));
+				read(client_fd, &size, sizeof(int));
 				file->size = ntohl(size);
 
 				printf("File type: %d\n", file->type);
@@ -335,15 +338,15 @@ void rcopy_server(unsigned short port){
 
 				if (S_ISREG(file->mode)){
 					response = handle_file(file);
-					write(fd, &response, sizeof(int));
+					write(client_fd, &response, sizeof(int));
 				} else if (S_ISDIR(file->mode)){
 					response = handle_file(file);
-					write(fd, &response, sizeof(int));
+					write(client_fd, &response, sizeof(int));
 				}
 				// this should be awaiting data, but we haven't implemented this state yet
 				state = AWAITING_TYPE;
 			}
 	    }
 	}
-	close(listenfd);
+	close(socket_fd);
 }
