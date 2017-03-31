@@ -195,10 +195,10 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
-		printf("Successfully transferred: %s\n", source);
+		printf("Successfully transferred: %s\n", file->path);
 		exit(0);
 	} else if (server_res == ERROR){
-		printf("Error transferring: %s\n", source);
+		printf("Error transferring: %s\n", file->path);
 		exit(1);
 	}
 		
@@ -437,7 +437,7 @@ void rcopy_server(unsigned short port){
 								// Tell client that file should be sent as it does not
 								// exist on the server.
 								write(files[i].sock_fd, &response, sizeof(int));
-								files[i].state = AWAITING_DATA;
+								files[i].state = AWAITING_TYPE;
 
 							}else{
 
@@ -467,26 +467,43 @@ void rcopy_server(unsigned short port){
 					}
 					
 				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
-					int in;
+					int in, out, sock_index;
 					FILE *fp = fopen(files[i].path, "w");
 					char contents[MAXDATA] = {'\0'};
 					in = read(files[i].sock_fd, contents, files[i].size);
 					contents[in] = '\0';
+					printf("%s %d\n", files[i].path, files[i].size);
 					// printf("reading %d bytes\n", files[i].size);
 
 					// If we are sure that we have read the entire file contents from 
 					// the socket, we will write this to our file on the server and
 					// close our socket as it will no longer be used. We must prepare
 					// it for reuse when new clients connect to our server.
-					fwrite(contents, 1, MAXDATA, fp);
+					out = fwrite(contents, 1, in + 1, fp);
 
-					// TODO: return error if an error occurs
-					response = OK;
+					if (in + 1 == out && in == files[i].size){
+						response = OK;
+					}else{
+						response = ERROR;
+					}
 					write(files[i].sock_fd, &response, sizeof(int));
 
 					files[i].sock_fd = -1;
+					files[i].type = AWAITING_TYPE;
 					FD_CLR(files[i].sock_fd, &all_fds);
 					fclose(fp);
+
+					// update max_fd
+					sock_index = 0;
+					while (sock_index < 100) {
+				        if (files[sock_index].sock_fd > max_fd) {
+	                		max_fd = files[sock_index].sock_fd;
+	            		}
+	            		sock_index += 1;
+				    }
+
+				    // We must always update max_fd for the select call
+
 				}
 		    }
 	    }
