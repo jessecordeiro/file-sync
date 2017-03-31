@@ -191,7 +191,7 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		fread(contents, 1, file->size, fp);
 		int written;
 	    written = write(soc_child, contents, file->size);
-	    // printf("written %d\n", written);
+	    // printf("%s, fd: %d, written %d\n", file->path, soc_child, written);
 		fclose(fp);
 	}
 
@@ -385,7 +385,7 @@ void rcopy_server(unsigned short port){
 			        index++;
 			    }
 			    files[index].sock_fd = client_fd;
-			    files[index].type = AWAITING_TYPE;
+			    files[index].state = AWAITING_TYPE;
 
 			    // We must always update max_fd for the select call
 				if (client_fd > max_fd) {
@@ -468,6 +468,7 @@ void rcopy_server(unsigned short port){
 						}
 					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
+						// printf("%d %s %d\n", files[i].sock_fd, files[i].path, files[i].state);
 					}else{
 						FILE *fp = fopen(files[i].path, "w");
 						response = OK;
@@ -489,7 +490,7 @@ void rcopy_server(unsigned short port){
 					char contents[MAXDATA] = {'\0'};
 					in = read(files[i].sock_fd, contents, files[i].size);
 					contents[in] = '\0';
-					printf("%s %d\n", files[i].path, files[i].size);
+					// printf("%s %d\n", files[i].path, files[i].size);
 					// printf("reading %d bytes\n", files[i].size);
 
 					// If we are sure that we have read the entire file contents from 
@@ -506,21 +507,22 @@ void rcopy_server(unsigned short port){
 					}
 					write(files[i].sock_fd, &response, sizeof(int));
 
-					files[i].sock_fd = -1;
-					files[i].type = AWAITING_TYPE;
+					// update max_fd
+					if (files[i].sock_fd == max_fd){
+						sock_index = 0;
+						while (sock_index < 100) {
+					        if (files[sock_index].sock_fd > max_fd) {
+		                		max_fd = files[sock_index].sock_fd;
+		            		}
+		            		sock_index += 1;
+					    }
+					}
+
+
+				    files[i].sock_fd = -1;
+					files[i].state = AWAITING_TYPE;
 					FD_CLR(files[i].sock_fd, &all_fds);
 					fclose(fp);
-
-					// update max_fd
-					sock_index = 0;
-					while (sock_index < 100) {
-				        if (files[sock_index].sock_fd > max_fd) {
-	                		max_fd = files[sock_index].sock_fd;
-	            		}
-	            		sock_index += 1;
-				    }
-
-				    // We must always update max_fd for the select call
 
 				}
 		    }
