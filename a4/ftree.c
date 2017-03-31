@@ -180,6 +180,8 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			establish_connection(&soc_child, host, port);
 
 			int request_type = htonl(TRANSFILE);
+			nl_mode = htonl(file->mode);
+			nl_size = htonl(file->size);
 			write(soc_child, &request_type, sizeof(int));
 			write(soc_child, file->path, MAXPATH);
 			write(soc_child, &nl_mode, sizeof(int));
@@ -187,10 +189,12 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			write(soc_child, &nl_size, sizeof(int));
 
 			// Write file contents to server
-			char contents[MAXDATA];
+			char contents[file->size];
         	FILE *fp = fopen(file->path, "r");
-			fread(contents, 1, MAXDATA, fp);
-	        write(soc_child, contents, MAXDATA);
+			fread(contents, 1, file->size, fp);
+			int written;
+	        written = write(soc_child, contents, file->size);
+	        printf("written %d\n", written);
 			fclose(fp);
 		}
 	}
@@ -434,20 +438,20 @@ void rcopy_server(unsigned short port){
 					}
 					
 				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
+					int in;
 					FILE *fp = fopen(files[i].path, "w");
-					char contents[MAXDATA];
-					if (read(files[i].sock_fd, contents, MAXDATA) == MAXDATA){
-
-						contents[MAXDATA] = '\0';
-
-						// If we are sure that we have read the entire file contents from 
-						// the socket, we will write this to our file on the server and
-						// close our socket as it will no longer be used. We must prepare
-						// it for reuse when new clients connect to our server.
-						fwrite(contents, 1, MAXDATA, fp);
-						files[i].sock_fd = -1;
-						FD_CLR(files[i].sock_fd, &all_fds);
-					}
+					char contents[MAXDATA] = {'\0'};
+					in = read(files[i].sock_fd, contents, files[i].size);
+					contents[in] = '\0';
+					printf("reading %d bytes\n", files[i].size);
+					
+					// If we are sure that we have read the entire file contents from 
+					// the socket, we will write this to our file on the server and
+					// close our socket as it will no longer be used. We must prepare
+					// it for reuse when new clients connect to our server.
+					fwrite(contents, 1, MAXDATA, fp);
+					files[i].sock_fd = -1;
+					FD_CLR(files[i].sock_fd, &all_fds);
 					fclose(fp);
 
 				}
