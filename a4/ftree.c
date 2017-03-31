@@ -490,8 +490,7 @@ void rcopy_server(unsigned short port){
 					char contents[MAXDATA] = {'\0'};
 					in = read(files[i].sock_fd, contents, files[i].size);
 					contents[in] = '\0';
-					// printf("%s %d\n", files[i].path, files[i].size);
-					// printf("reading %d bytes\n", files[i].size);
+
 
 					// If we are sure that we have read the entire file contents from 
 					// the socket, we will write this to our file on the server and
