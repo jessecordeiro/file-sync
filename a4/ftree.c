@@ -10,6 +10,8 @@
 #include "ftree.h"
 #include "hash.h"
 
+#define MAX_CONNECTIONS 20
+#define MAX_BACKLOG 5
 
 struct sockname {
     int sock_fd;
@@ -159,7 +161,6 @@ int transmit_struct(int soc, struct request *file){
 	// determine if we need to send the contents of the file.
 	if (S_ISREG(file->mode)) {
 		read(soc, &response, sizeof(int));
-		printf("RESPONSE FROM SERVER FOR %s: %d\n", file->path, response);
 	}
 	return response;
 }
@@ -228,10 +229,8 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 
 				// File our struct with appropriate file info
 				file = handle_copy(fchildpath);
-
 				// Determine if file should be updated on the server
 				server_res = transmit_struct(soc, file);
-
 				if (server_res == SENDFILE && S_ISREG(file->mode)){
 					pid = fork();
 					if (pid < 0){
@@ -260,7 +259,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				}
 				if (WIFEXITED(status)) {
 					char exitstatus = WEXITSTATUS(status);
-					if (exitstatus == ERROR){
+					if (exitstatus == 1){
 						exit = 1;
 					}
 				}
@@ -282,9 +281,9 @@ int rcopy_client(char *source, char *host, unsigned short port){
 
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode)){
-		trace_directory(source, soc, host, port);
+		return trace_directory(source, soc, host, port);
 	}else{
-		transmit_data(source, file, host, port);
+		return transmit_data(source, file, host, port);
 	}
 
 	free(file);
@@ -324,7 +323,7 @@ int setup(unsigned short port) {
 		exit(1);
 	}
 
-	if (listen(socket_fd, 5) == -1) {
+	if (listen(socket_fd, MAX_BACKLOG) == -1) {
 		perror("listen");
 		exit(1);
 	}
@@ -341,10 +340,10 @@ void rcopy_server(unsigned short port){
 	struct sockaddr_in peer;
 	fd_set all_fds, listen_fds;
 	socklen_t socklen;
-	struct sockname files[100];
+	struct sockname files[MAX_CONNECTIONS];
 
 	int index;
-	for (index = 0; index < 100; index++) {
+	for (index = 0; index < MAX_CONNECTIONS; index++) {
         files[index].sock_fd = -1;
         files[index].state = AWAITING_TYPE;
     }
@@ -381,7 +380,7 @@ void rcopy_server(unsigned short port){
 				// Find next available socket struct in our array and
 				// update its fields to reference the new client.
 				index = 0;
-				while (index < 100 && files[index].sock_fd != -1) {
+				while (index < MAX_CONNECTIONS && files[index].sock_fd != -1) {
 			        index++;
 			    }
 			    files[index].sock_fd = client_fd;
@@ -396,7 +395,7 @@ void rcopy_server(unsigned short port){
 
 	    // Check which client is ready to send information to our server
 	    int i;
-	    for (i = 0; i < 100; i++){
+	    for (i = 0; i < MAX_CONNECTIONS; i++){
 	    	if (FD_ISSET(files[i].sock_fd, &listen_fds) && files[i].sock_fd > -1){
 		    	if (files[i].state == AWAITING_TYPE){
 
@@ -448,8 +447,8 @@ void rcopy_server(unsigned short port){
 								// If file does exist on the server, the client has
 								// nothing else to do, so we will remove the socket
 								// to allow future connections to reuse it.
-								files[i].sock_fd = -1;
-								FD_CLR(files[i].sock_fd, &all_fds);
+								write(files[i].sock_fd, &response, sizeof(int));
+							        files[i].state = AWAITING_TYPE;
 							}
 						} else if (S_ISDIR(files[i].mode)){
 							if (response == SENDFILE){
@@ -479,50 +478,51 @@ void rcopy_server(unsigned short port){
 							fclose(fp);
 						}
 						write(files[i].sock_fd, &response, sizeof(int));
-						files[i].sock_fd = -1;
 						FD_CLR(files[i].sock_fd, &all_fds);
+						files[i].sock_fd = -1;
 						files[i].state = AWAITING_TYPE;
 					}
 					
 				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
 					int in, out, sock_index;
 					FILE *fp = fopen(files[i].path, "w");
-					char contents[MAXDATA] = {'\0'};
-					in = read(files[i].sock_fd, contents, files[i].size);
-					contents[in] = '\0';
-					// printf("%s %d\n", files[i].path, files[i].size);
-					// printf("reading %d bytes\n", files[i].size);
 
-					// If we are sure that we have read the entire file contents from 
-					// the socket, we will write this to our file on the server and
-					// close our socket as it will no longer be used. We must prepare
-					// it for reuse when new clients connect to our server.
-					out = fwrite(contents, 1, in + 1, fp);
+					// If the file can be created, update its contents
+					if (fp != NULL){
+						char contents[MAXDATA] = {'\0'};
+						in = read(files[i].sock_fd, contents, files[i].size);
+						contents[in] = '\0';
 
-					if (in + 1 == out && in == files[i].size){
-						response = OK;
+						// If we are sure that we have read the entire file contents from 
+						// the socket, we will write this to our file on the server and
+						// close our socket as it will no longer be used. We must prepare
+						// it for reuse when new clients connect to our server.
+						out = fwrite(contents, 1, in, fp);
+
+						if (in == out && in == files[i].size){
+							response = OK;
+						}else{
+							response = ERROR;
+						}
+
+						// update max_fd
+						if (files[i].sock_fd == max_fd){
+							sock_index = 0;
+							while (sock_index < MAX_CONNECTIONS) {
+						        if (files[sock_index].sock_fd > max_fd) {
+			                		max_fd = files[sock_index].sock_fd;
+			            		}
+			            		sock_index += 1;
+						    }
+						}
+						fclose(fp);
 					}else{
-						// WE MUST ALSO ERROR WHEN WE CANNOT CREATE THE FILE
 						response = ERROR;
 					}
 					write(files[i].sock_fd, &response, sizeof(int));
-
-					// update max_fd
-					if (files[i].sock_fd == max_fd){
-						sock_index = 0;
-						while (sock_index < 100) {
-					        if (files[sock_index].sock_fd > max_fd) {
-		                		max_fd = files[sock_index].sock_fd;
-		            		}
-		            		sock_index += 1;
-					    }
-					}
-
-
-				    files[i].sock_fd = -1;
+					files[i].sock_fd = -1;
 					files[i].state = AWAITING_TYPE;
 					FD_CLR(files[i].sock_fd, &all_fds);
-					fclose(fp);
 
 				}
 		    }
