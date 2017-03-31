@@ -164,40 +164,44 @@ int transmit_struct(int soc, struct request *file){
 	return response;
 }
 
-int transmit_data(char *source, int server_res, struct request *file, char *host, unsigned short port){
-	int pid, nl_type, nl_mode, nl_size;
+int transmit_data(char *source, struct request *file, char *host, unsigned short port){
+	int nl_type, nl_mode, nl_size, server_res;
 
 	// If the file needs to be sent, we will fork a new process to open a new connection
 	// to the server and perform this procedure.
-	if (server_res == SENDFILE && S_ISREG(file->mode)){
-		pid = fork();
-		if (pid < 0){
-			perror("fork");
-		} else if (pid == 0){
-			FILE *filesrc;
-			int soc_child;
-			char data;
-			establish_connection(&soc_child, host, port);
 
-			int request_type = htonl(TRANSFILE);
-			nl_mode = htonl(file->mode);
-			nl_size = htonl(file->size);
-			write(soc_child, &request_type, sizeof(int));
-			write(soc_child, file->path, MAXPATH);
-			write(soc_child, &nl_mode, sizeof(int));
-			write(soc_child, file->hash, BLOCKSIZE);
-			write(soc_child, &nl_size, sizeof(int));
+	FILE *filesrc;
+	int soc_child;
+	char data;
+	establish_connection(&soc_child, host, port);
 
-			// Write file contents to server
-			char contents[file->size];
-        	FILE *fp = fopen(file->path, "r");
-			fread(contents, 1, file->size, fp);
-			int written;
-	        written = write(soc_child, contents, file->size);
-	        printf("written %d\n", written);
-			fclose(fp);
-		}
+	int request_type = htonl(TRANSFILE);
+	nl_mode = htonl(file->mode);
+	nl_size = htonl(file->size);
+	write(soc_child, &request_type, sizeof(int));
+	write(soc_child, file->path, MAXPATH);
+	write(soc_child, &nl_mode, sizeof(int));
+	write(soc_child, file->hash, BLOCKSIZE);
+	write(soc_child, &nl_size, sizeof(int));
+
+	// Write file contents to server
+	char contents[file->size];
+	FILE *fp = fopen(file->path, "r");
+	fread(contents, 1, file->size, fp);
+	int written;
+    written = write(soc_child, contents, file->size);
+    // printf("written %d\n", written);
+	fclose(fp);
+
+	read(soc_child, &server_res, sizeof(int));
+	if (server_res == OK){
+		printf("Successfully transferred: %s\n", source);
+		exit(0);
+	} else if (server_res == ERROR){
+		printf("Error transferring: %s\n", source);
+		exit(1);
 	}
+		
 }
 
 int trace_directory(char *source, int soc, char *host, unsigned short port){
@@ -208,7 +212,8 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 	} else {
 		struct dirent *dp;
 		struct stat fchildstats;
-		int server_res;
+		int server_res, pid;
+		int forkcount = 0;
 		while ((dp = readdir(dirp)) != NULL) {
 			if ((dp->d_name)[0] != '.') {
 				// Path is used to store the complete file path to the file
@@ -224,10 +229,17 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				// Determine if file should be updated on the server
 				server_res = transmit_struct(soc, file);
 
-				// After transmitting file info, we will transmit the data if server requests it
-				transmit_data(fchildpath, server_res, file, host, port);
-
-				if (S_ISDIR(file->mode)) {
+				if (server_res == SENDFILE && S_ISREG(file->mode)){
+					pid = fork();
+					if (pid < 0){
+						perror("fork");
+					} else if (pid == 0){
+						// After transmitting file info, we will transmit the data if server requests it
+						transmit_data(fchildpath, file, host, port);
+					} else{
+						forkcount += 1;
+					}
+				}else if (S_ISDIR(file->mode)) {
 
 					// Recursive call on this file path to process the subdirectory
 					trace_directory(fchildpath, soc, host, port);
@@ -235,6 +247,22 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				// Deallocate memory for path as it is no longer used.
 				free(fchildpath);
 			}
+		}// End of processing contents of immediate directory
+		if (pid > 0){
+			int status, i;
+			int exit = 0;
+			for (i = 0; i < forkcount; i++){
+				if (wait(&status) == -1){
+					perror("wait");
+				}
+				if (WIFEXITED(status)) {
+					char exitstatus = WEXITSTATUS(status);
+					if (exitstatus == ERROR){
+						exit = 1;
+					}
+				}
+			}
+			return exit;
 		}
 	}
 }
@@ -248,11 +276,12 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	file = handle_copy(basename(source));
 	server_res = transmit_struct(soc, file);
 
-	transmit_data(source, server_res, file, host, port);
 
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode)){
 		trace_directory(source, soc, host, port);
+	}else{
+		transmit_data(source, file, host, port);
 	}
 
 	free(file);
@@ -377,7 +406,7 @@ void rcopy_server(unsigned short port){
 		    	} else if (files[i].state == AWAITING_PATH){
 					read(files[i].sock_fd, &(files[i].path), MAXPATH);
 					files[i].state = AWAITING_PERM;
-					printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
+					// printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
 
 				} else if (files[i].state == AWAITING_PERM){
 					read(files[i].sock_fd, &nl_mode, sizeof(int));
@@ -431,7 +460,7 @@ void rcopy_server(unsigned short port){
 							// reset the state for this socket to allow for subdirectories/
 							// files in the directory to be copied.
 							files[i].state = AWAITING_TYPE;
-							write(files[i].sock_fd, &response, sizeof(int));
+							// write(files[i].sock_fd, &response, sizeof(int));
 						}
 					}else{
 						files[i].state = AWAITING_DATA;
@@ -443,17 +472,21 @@ void rcopy_server(unsigned short port){
 					char contents[MAXDATA] = {'\0'};
 					in = read(files[i].sock_fd, contents, files[i].size);
 					contents[in] = '\0';
-					printf("reading %d bytes\n", files[i].size);
-					
+					// printf("reading %d bytes\n", files[i].size);
+
 					// If we are sure that we have read the entire file contents from 
 					// the socket, we will write this to our file on the server and
 					// close our socket as it will no longer be used. We must prepare
 					// it for reuse when new clients connect to our server.
 					fwrite(contents, 1, MAXDATA, fp);
+
+					// TODO: return error if an error occurs
+					response = OK;
+					write(files[i].sock_fd, &response, sizeof(int));
+
 					files[i].sock_fd = -1;
 					FD_CLR(files[i].sock_fd, &all_fds);
 					fclose(fp);
-
 				}
 		    }
 	    }
