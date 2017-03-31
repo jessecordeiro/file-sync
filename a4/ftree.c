@@ -182,7 +182,7 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			int request_type = htonl(TRANSFILE);
 			write(soc_child, &request_type, sizeof(int));
 			write(soc_child, file->path, MAXPATH);
-			write(soc_child, &nl_mode, sizeof(mode_t));
+			write(soc_child, &nl_mode, sizeof(int));
 			write(soc_child, file->hash, BLOCKSIZE);
 			write(soc_child, &nl_size, sizeof(int));
 
@@ -190,7 +190,7 @@ int transmit_data(char *source, int server_res, struct request *file, char *host
 			char contents[MAXDATA];
         	FILE *fp = fopen(file->path, "r");
 			fread(contents, 1, MAXDATA, fp);
-	        write(soc_child, contents, file->size);
+	        write(soc_child, contents, MAXDATA);
 			fclose(fp);
 		}
 	}
@@ -373,7 +373,7 @@ void rcopy_server(unsigned short port){
 		    	} else if (files[i].state == AWAITING_PATH){
 					read(files[i].sock_fd, &(files[i].path), MAXPATH);
 					files[i].state = AWAITING_PERM;
-					// printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
+					printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
 
 				} else if (files[i].state == AWAITING_PERM){
 					read(files[i].sock_fd, &nl_mode, sizeof(int));
@@ -396,53 +396,55 @@ void rcopy_server(unsigned short port){
 					// printf("File path: %s\n", files[i].path);
 					// printf("File mode: %d\n", files[i].mode);
 					// printf("File size: %d bytes\n", files[i].size);
+					if (files[i].type != TRANSFILE){
+						response = handle_file(&files[i]);
+						if (S_ISREG(files[i].mode)){
+							if (response == SENDFILE){
 
-					response = handle_file(&files[i]);
-					if (S_ISREG(files[i].mode)){
-						if (response == SENDFILE){
-
-							// Tell client that file should be sent as it does not
-							// exist on the server.
-							write(files[i].sock_fd, &response, sizeof(int));
-							if (files[i].type == TRANSFILE) {
+								// Tell client that file should be sent as it does not
+								// exist on the server.
+								write(files[i].sock_fd, &response, sizeof(int));
 								files[i].state = AWAITING_DATA;
-							} else {
-								files[i].state = AWAITING_TYPE;
-							}
-						}else{
 
-							// If file does exist on the server, the client has
-							// nothing else to do, so we will remove the socket
-							// to allow future connections to reuse it.
-							files[i].sock_fd = -1;
-							FD_CLR(files[i].sock_fd, &all_fds);
-						}
-					} else if (S_ISDIR(files[i].mode)){
-						if (response == SENDFILE){
+							}else{
 
-							// If directory does not exist on the server create it
-							int permissionsrc = (files[i].mode & 0777);
-							if (mkdir(files[i].path, permissionsrc) != 0){
-								perror("mkdir");
+								// If file does exist on the server, the client has
+								// nothing else to do, so we will remove the socket
+								// to allow future connections to reuse it.
+								files[i].sock_fd = -1;
+								FD_CLR(files[i].sock_fd, &all_fds);
 							}
+						} else if (S_ISDIR(files[i].mode)){
+							if (response == SENDFILE){
+
+								// If directory does not exist on the server create it
+								int permissionsrc = (files[i].mode & 0777);
+								if (mkdir(files[i].path, permissionsrc) != 0){
+									perror("mkdir");
+								}
+							}
+							// If we are dealing with a directory, we must
+							// reset the state for this socket to allow for subdirectories/
+							// files in the directory to be copied.
+							files[i].state = AWAITING_TYPE;
+							write(files[i].sock_fd, &response, sizeof(int));
 						}
-						// If we are dealing with a directory, we must
-						// reset the state for this socket to allow for subdirectories/
-						// files in the directory to be copied.
-						files[i].state = AWAITING_TYPE;
-						write(files[i].sock_fd, &response, sizeof(int));
+					}else{
+						files[i].state = AWAITING_DATA;
 					}
-				} else if (files[i].state == AWAITING_DATA){
+					
+				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
 					FILE *fp = fopen(files[i].path, "w");
 					char contents[MAXDATA];
-					if (read(client_fd, &contents, files[i].size) == files[i].size){
-						contents[files[i].size] = '\0';
+					if (read(files[i].sock_fd, contents, MAXDATA) == MAXDATA){
+
+						contents[MAXDATA] = '\0';
 
 						// If we are sure that we have read the entire file contents from 
 						// the socket, we will write this to our file on the server and
 						// close our socket as it will no longer be used. We must prepare
 						// it for reuse when new clients connect to our server.
-						fwrite(contents, 1, files[i].size, fp);
+						fwrite(contents, 1, MAXDATA, fp);
 						files[i].sock_fd = -1;
 						FD_CLR(files[i].sock_fd, &all_fds);
 					}
