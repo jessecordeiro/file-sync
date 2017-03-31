@@ -185,13 +185,16 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 	write(soc_child, &nl_size, sizeof(int));
 
 	// Write file contents to server
-	char contents[file->size];
-	FILE *fp = fopen(file->path, "r");
-	fread(contents, 1, file->size, fp);
-	int written;
-    written = write(soc_child, contents, file->size);
-    // printf("written %d\n", written);
-	fclose(fp);
+	if (file->size > 0){
+		char contents[file->size];
+		FILE *fp = fopen(file->path, "r");
+		fread(contents, 1, file->size, fp);
+		int written;
+	    written = write(soc_child, contents, file->size);
+	    // printf("written %d\n", written);
+		fclose(fp);
+	}
+
 
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
@@ -382,6 +385,7 @@ void rcopy_server(unsigned short port){
 			        index++;
 			    }
 			    files[index].sock_fd = client_fd;
+			    files[index].type = AWAITING_TYPE;
 
 			    // We must always update max_fd for the select call
 				if (client_fd > max_fd) {
@@ -462,8 +466,21 @@ void rcopy_server(unsigned short port){
 							files[i].state = AWAITING_TYPE;
 							// write(files[i].sock_fd, &response, sizeof(int));
 						}
-					}else{
+					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
+					}else{
+						FILE *fp = fopen(files[i].path, "w");
+						response = OK;
+						if (fp == NULL){
+							perror("fopen:");
+							response = ERROR;
+						}else{
+							fclose(fp);
+						}
+						write(files[i].sock_fd, &response, sizeof(int));
+						files[i].sock_fd = -1;
+						FD_CLR(files[i].sock_fd, &all_fds);
+						files[i].state = AWAITING_TYPE;
 					}
 					
 				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
@@ -484,6 +501,7 @@ void rcopy_server(unsigned short port){
 					if (in + 1 == out && in == files[i].size){
 						response = OK;
 					}else{
+						// WE MUST ALSO ERROR WHEN WE CANNOT CREATE THE FILE
 						response = ERROR;
 					}
 					write(files[i].sock_fd, &response, sizeof(int));
