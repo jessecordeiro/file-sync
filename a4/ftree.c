@@ -32,15 +32,20 @@ int handle_file(struct sockname *filesrc){
 
 	// File/dir already exists in destination
 	if (lstat(destpath, &fstats_dest) != -1){
-		if (S_ISREG(fstats_dest.st_mode) != S_ISREG(filesrc->mode)){
-			perror("mismatch");
-			return ERROR;
+
 		// If file sizes are consistent, compare hash to determine
 		// if file should be overwritten
-		} else if (S_ISREG(filesrc->mode)){
+		if (S_ISREG(filesrc->mode) && S_ISREG(fstats_dest.st_mode)){
 			if (fstats_dest.st_size == filesrc->size){
 				FILE *filedest;
 				filedest = fopen(destpath, "rb");
+
+				// Emit error if there is a type mismatch
+				if (filedest == NULL){
+		    		perror("fopen");
+		    		return ERROR;
+		    	}else{
+
 		    		char hashdest[BLOCKSIZE];
 		    		strcpy(hashdest, hash(hashdest, filedest));
 		    		fclose(filedest);
@@ -51,14 +56,18 @@ int handle_file(struct sockname *filesrc){
 		    			return SENDFILE;
 		    		}
 		    		return OK;
+		    	}
+
 		    // If size differs, copy is performed
 			}else{
 				// Copy file contents to destination
 				return SENDFILE;
 
 			} // End of file size comparison
-		}else{
+		}else if (S_ISDIR(filesrc->mode) && S_ISDIR(fstats_dest.st_mode)){
 			return OK;
+		}else{
+			return ERROR;
 		}
 
 		// If file permissions in src differ from destination,
@@ -152,6 +161,8 @@ int transmit_struct(int soc, struct request *file){
 
 	// If we are dealing with a regular file, we must check the server's response to
 	// determine if we need to send the contents of the file.
+	// If file is a directory, we must determine if there was an error creating the
+	// directory on the server.
 	read(soc, &response, sizeof(int));
 	return response;
 }
@@ -209,6 +220,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 		struct stat fchildstats;
 		int server_res, pid;
 		int forkcount = 0;
+		int exit = 0;
 		while ((dp = readdir(dirp)) != NULL) {
 			if ((dp->d_name)[0] != '.') {
 				// Path is used to store the complete file path to the file
@@ -222,7 +234,11 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				file = handle_copy(fchildpath);
 				// Determine if file should be updated on the server
 				server_res = transmit_struct(soc, file);
-				if (server_res == SENDFILE && S_ISREG(file->mode)){
+				if (server_res == ERROR) {
+					printf("Error transferring: %s\n", fchildpath);
+					exit = 1;
+				}
+				else if (server_res == SENDFILE && S_ISREG(file->mode)){
 					pid = fork();
 					if (pid < 0){
 						perror("fork");
@@ -243,7 +259,6 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 		}// End of processing contents of immediate directory
 		if (pid > 0){
 			int status, i;
-			int exit = 0;
 			for (i = 0; i < forkcount; i++){
 				if (wait(&status) == -1){
 					perror("wait");
@@ -255,8 +270,8 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 					}
 				}
 			}
-			return exit;
 		}
+		return exit;
 	}
 }
 
@@ -269,16 +284,17 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	file = handle_copy(basename(source));
 	server_res = transmit_struct(soc, file);
 
+
 	// If we are dealing with a directory, we must traverse its contents
-	if (S_ISDIR(file->mode) && server_res != ERROR){
+	if (S_ISDIR(file->mode)){
 		return trace_directory(source, soc, host, port);
-	}else if (S_ISREG(file->mode)){
+	}else{
 		return transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
-	return 1;
+	return 0;
 }
 
 /* 
@@ -447,13 +463,17 @@ void rcopy_server(unsigned short port){
 								int permissionsrc = (files[i].mode & 0777);
 								if (mkdir(files[i].path, permissionsrc) != 0){
 									perror("mkdir");
+									response = ERROR;
+								}else{
+									response = OK;
 								}
 							}
+							write(files[i].sock_fd, &response, sizeof(int));
 							// If we are dealing with a directory, we must
 							// reset the state for this socket to allow for subdirectories/
 							// files in the directory to be copied.
 							files[i].state = AWAITING_TYPE;
-							write(files[i].sock_fd, &response, sizeof(int));
+							// write(files[i].sock_fd, &response, sizeof(int));
 						}
 					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
