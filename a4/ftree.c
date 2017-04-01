@@ -29,6 +29,7 @@ int handle_file(struct sockname *filesrc){
 	char *destpath = malloc(strlen(filesrc->path) + 1);
 	destpath[0] = '\0';
 	strcat(destpath, filesrc->path);
+	int action; 
 
 	// File/dir already exists in destination
 	if (lstat(destpath, &fstats_dest) != -1){
@@ -53,19 +54,19 @@ int handle_file(struct sockname *filesrc){
 		    		// If hash is not the same, file in src has changed
 		    		// and must be rewritten to destination
 		    		if (check_hash(filesrc->hash, hashdest) != 0){
-		    			return SENDFILE;
+		    			action = SENDFILE;
 		    		}
-		    		return OK;
+		    		action = OK;
 		    	}
 
 		    // If size differs, copy is performed
 			}else{
 				// Copy file contents to destination
-				return SENDFILE;
+				action = SENDFILE;
 
 			} // End of file size comparison
 		}else if (S_ISDIR(filesrc->mode) && S_ISDIR(fstats_dest.st_mode)){
-			return OK;
+			action = OK;
 		}else{
 			return ERROR;
 		}
@@ -80,10 +81,10 @@ int handle_file(struct sockname *filesrc){
 			}
 
 		}
+		return action;
 
 	// Create file since it does not already exist in source
 	}else if (lstat(destpath, &fstats_dest) == -1){
-		// printf("doesn't exist %s\n", destpath);
 		return SENDFILE;
 	}else{
 		return ERROR;
@@ -222,7 +223,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 		int forkcount = 0;
 		int exit = 0;
 		while ((dp = readdir(dirp)) != NULL) {
-			if ((dp->d_name)[0] != '.') {
+			if ((dp->d_name)[0] != '.' && !S_ISLNK(file->mode)) {
 				// Path is used to store the complete file path to the file
 				char *fchildpath = malloc(strlen(source) + strlen(dp->d_name) + 2);
 				strcpy(fchildpath, source);
@@ -278,7 +279,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 int rcopy_client(char *source, char *host, unsigned short port){
 	int soc, server_res;
 	struct request *file;
-
+	int exit = 1;
 	establish_connection(&soc, host, port);
 
 	file = handle_copy(basename(source));
@@ -287,16 +288,16 @@ int rcopy_client(char *source, char *host, unsigned short port){
 
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
-		return trace_directory(source, soc, host, port);
+		exit = trace_directory(source, soc, host, port);
 	}else if (S_ISREG(file->mode)){
-		return transmit_data(source, file, host, port);
+		exit = transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
 
 	// This shouldn't be returned unless an occurs with transmit_struct
-	return 1;
+	return exit;
 }
 
 /* 
