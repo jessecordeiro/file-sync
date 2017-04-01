@@ -216,7 +216,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 		int forkcount = 0;
 		int exit = 0;
 		while ((dp = readdir(dirp)) != NULL) {
-			if ((dp->d_name)[0] != '.' && !S_ISLNK(file->mode)) {
+			if ((dp->d_name)[0] != '.') {
 				// Path is used to store the complete file path to the file
 				char *fchildpath = malloc(strlen(source) + strlen(dp->d_name) + 2);
 				strcpy(fchildpath, source);
@@ -224,30 +224,33 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				strcat(fchildpath, dp->d_name);
 				lstat(fchildpath, &fchildstats);
 
-				// File our struct with appropriate file info
-				file = handle_copy(fchildpath);
-				// Determine if file should be updated on the server
-				server_res = transmit_struct(soc, file);
-				if (server_res == ERROR) {
-					exit = 1;
-				}
-				else if (server_res == SENDFILE && S_ISREG(file->mode)){
-					pid = fork();
-					if (pid < 0){
-						perror("fork");
-					} else if (pid == 0){
-						// After transmitting file info, we will transmit the data if server requests it
-						transmit_data(fchildpath, file, host, port);
-					} else{
-						forkcount += 1;
+				// Ignore links
+				if (S_ISREG(fchildstats.st_mode) || S_ISDIR(fchildstats.st_mode)) {
+					// Fill our struct with appropriate file info
+					file = handle_copy(fchildpath);
+					// Determine if file should be updated on the server
+					server_res = transmit_struct(soc, file);
+					if (server_res == ERROR) {
+						exit = 1;
 					}
-				}else if (S_ISDIR(file->mode)) {
+					else if (server_res == SENDFILE && S_ISREG(file->mode)){
+						pid = fork();
+						if (pid < 0){
+							perror("fork");
+						} else if (pid == 0){
+							// After transmitting file info, we will transmit the data if server requests it
+							transmit_data(fchildpath, file, host, port);
+						} else{
+							forkcount += 1;
+						}
+					}else if (S_ISDIR(file->mode)) {
 
-					// Recursive call on this file path to process the subdirectory
-					trace_directory(fchildpath, soc, host, port);
+						// Recursive call on this file path to process the subdirectory
+						trace_directory(fchildpath, soc, host, port);
+					}
+					// Deallocate memory for path as it is no longer used.
+					free(fchildpath);
 				}
-				// Deallocate memory for path as it is no longer used.
-				free(fchildpath);
 			}
 		}// End of processing contents of immediate directory
 		if (pid > 0){
