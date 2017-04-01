@@ -23,7 +23,6 @@ struct sockname {
 	int size;
 };
 
-
 int handle_file(struct sockname *filesrc){
 	struct stat fstats_dest;
 	char *destpath = malloc(strlen(filesrc->path) + 1);
@@ -34,19 +33,18 @@ int handle_file(struct sockname *filesrc){
 	// File/dir already exists in destination
 	if (lstat(destpath, &fstats_dest) != -1){
 
-		// If file sizes are consistent, compare hash to determine
-		// if file should be overwritten
+		// Emit error if there is a type mismatch
 		if (S_ISREG(filesrc->mode) && S_ISREG(fstats_dest.st_mode)){
+
+			// If file sizes are consistent, compare hash to determine
+			// if file should be overwritten
 			if (fstats_dest.st_size == filesrc->size){
 				FILE *filedest;
 				filedest = fopen(destpath, "rb");
-
-				// Emit error if there is a type mismatch
 				if (filedest == NULL){
 					perror("fopen");
 					return ERROR;
 				}else{
-
 					char hashdest[BLOCKSIZE];
 					strcpy(hashdest, hash(hashdest, filedest));
 					fclose(filedest);
@@ -59,12 +57,10 @@ int handle_file(struct sockname *filesrc){
 					action = OK;
 				}
 
-			// If size differs, copy is performed
 			}else{
-				// Copy file contents to destination
+				// If size differs, there must be a file transfer
 				action = SENDFILE;
-
-			} // End of file size comparison
+			}
 		}else if (S_ISDIR(filesrc->mode) && S_ISDIR(fstats_dest.st_mode)){
 			action = OK;
 		}else{
@@ -79,11 +75,10 @@ int handle_file(struct sockname *filesrc){
 			if (chmod(destpath, permissionsrc) != 0){
 				perror("chmod");
 			}
-
 		}
 		return action;
 
-	// Create file since it does not already exist in source
+	// Transfer file if it does not already exist in source
 	}else if (lstat(destpath, &fstats_dest) == -1){
 		return SENDFILE;
 	}else{
@@ -94,6 +89,8 @@ int handle_file(struct sockname *filesrc){
 struct request *fill_struct(struct stat fstats, char *src, int type){
 	FILE *filesrc;
 	struct request *file = malloc(sizeof(struct request));
+
+	// Get the file type, path, mode and size (plus hash if reg file)
 	file->type = type;
 	strcpy(file->path, src);
 	file->mode = fstats.st_mode;
@@ -104,6 +101,7 @@ struct request *fill_struct(struct stat fstats, char *src, int type){
 	}else{
 		strcpy(file->hash, hash(file->hash, filesrc));
 	}
+
 	return file;
 }
 
@@ -160,10 +158,7 @@ int transmit_struct(int soc, struct request *file){
 	}
 	write(soc, &nl_size, sizeof(int));
 
-	// If we are dealing with a regular file, we must check the server's response to
-	// determine if we need to send the contents of the file.
-	// If file is a directory, we must determine if there was an error creating the
-	// directory on the server.
+	// Get the response from the server on whether the file/dir needs to be copied
 	read(soc, &response, sizeof(int));
 	return response;
 }
@@ -195,10 +190,8 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		fread(contents, 1, file->size, fp);
 		int written;
 		written = write(soc_child, contents, file->size);
-		// printf("%s, fd: %d, written %d\n", file->path, soc_child, written);
 		fclose(fp);
 	}
-
 
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
@@ -236,7 +229,6 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				// Determine if file should be updated on the server
 				server_res = transmit_struct(soc, file);
 				if (server_res == ERROR) {
-					printf("Error transferring: %s\n", fchildpath);
 					exit = 1;
 				}
 				else if (server_res == SENDFILE && S_ISREG(file->mode)){
@@ -285,7 +277,6 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	file = handle_copy(basename(source));
 	server_res = transmit_struct(soc, file);
 
-
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
 		exit = trace_directory(source, soc, host, port);
@@ -296,7 +287,6 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	free(file);
 	close(soc);
 
-	// This shouldn't be returned unless an occurs with transmit_struct
 	return exit;
 }
 
@@ -406,8 +396,8 @@ void rcopy_server(unsigned short port){
 		int i;
 		for (i = 0; i < MAX_CONNECTIONS; i++){
 			if (FD_ISSET(files[i].sock_fd, &listen_fds) && files[i].sock_fd > -1){
-				if (files[i].state == AWAITING_TYPE){
 
+				if (files[i].state == AWAITING_TYPE){
 					// Sanity check to determine if client_fd needs to be removed
 					if (read(files[i].sock_fd, &type, sizeof(int)) == 0){
 						FD_CLR(client_fd, &all_fds);
@@ -415,10 +405,10 @@ void rcopy_server(unsigned short port){
 					}
 					files[i].type = ntohl(type);
 					files[i].state = AWAITING_PATH;
+
 				} else if (files[i].state == AWAITING_PATH){
 					read(files[i].sock_fd, &(files[i].path), MAXPATH);
 					files[i].state = AWAITING_PERM;
-					// printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
 
 				} else if (files[i].state == AWAITING_PERM){
 					read(files[i].sock_fd, &nl_mode, sizeof(int));
@@ -430,9 +420,11 @@ void rcopy_server(unsigned short port){
 					}else {
 						files[i].state = AWAITING_SIZE;
 					}
+
 				}else if (files[i].state == AWAITING_HASH){
 					read(files[i].sock_fd, &(files[i].hash), BLOCKSIZE);
 					files[i].state = AWAITING_SIZE;
+
 				} else if (files[i].state == AWAITING_SIZE){
 					read(files[i].sock_fd, &size, sizeof(int));
 					files[i].size = ntohl(size);
@@ -444,21 +436,8 @@ void rcopy_server(unsigned short port){
 					if (files[i].type != TRANSFILE){
 						response = handle_file(&files[i]);
 						if (S_ISREG(files[i].mode)){
-							if (response == SENDFILE){
-
-								// Tell client that file should be sent as it does not
-								// exist on the server.
 								write(files[i].sock_fd, &response, sizeof(int));
 								files[i].state = AWAITING_TYPE;
-
-							}else{
-
-								// If file does exist on the server, the client has
-								// nothing else to do, so we will remove the socket
-								// to allow future connections to reuse it.
-								write(files[i].sock_fd, &response, sizeof(int));
-									files[i].state = AWAITING_TYPE;
-							}
 						} else if (S_ISDIR(files[i].mode)){
 							if (response == SENDFILE){
 
@@ -476,11 +455,10 @@ void rcopy_server(unsigned short port){
 							// reset the state for this socket to allow for subdirectories/
 							// files in the directory to be copied.
 							files[i].state = AWAITING_TYPE;
-							// write(files[i].sock_fd, &response, sizeof(int));
 						}
+
 					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
-						// printf("%d %s %d\n", files[i].sock_fd, files[i].path, files[i].state);
 					}else{
 						FILE *fp = fopen(files[i].path, "w");
 						response = OK;
@@ -496,7 +474,7 @@ void rcopy_server(unsigned short port){
 						files[i].state = AWAITING_TYPE;
 					}
 					
-				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
+				}else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
 					int in, out, sock_index;
 					FILE *fp = fopen(files[i].path, "w");
 
@@ -540,7 +518,6 @@ void rcopy_server(unsigned short port){
 				}
 			}
 		}
-		
 	}
 	close(socket_fd);
 }
