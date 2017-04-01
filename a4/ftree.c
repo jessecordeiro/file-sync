@@ -90,11 +90,11 @@ int handle_file(struct sockname *filesrc){
 	}
 }
 
-struct request *fill_struct(struct stat fstats, char *src, int type){
+struct request *fill_struct(struct stat fstats, char *src, int type, char *relativesrc){
 	FILE *filesrc;
 	struct request *file = malloc(sizeof(struct request));
 	file->type = type;
-	strcpy(file->path, src);
+	strcpy(file->path, relativesrc);
 	file->mode = fstats.st_mode;
 	file->size = fstats.st_size;
     filesrc = fopen(src, "r");
@@ -106,16 +106,16 @@ struct request *fill_struct(struct stat fstats, char *src, int type){
 	return file;
 }
 
-struct request *handle_copy(char *src){
+struct request *handle_copy(char *src, char *relativesrc){
 	struct stat fstats;
 	struct request *dir_request;
 	lstat(src, &fstats);
 
 	// Omit regular files beginning with "."
 	if (S_ISREG(fstats.st_mode) && src[0] != '.') {
-		return fill_struct(fstats, src, REGFILE);
+		return fill_struct(fstats, src, REGFILE, relativesrc);
 	}else if (S_ISDIR(fstats.st_mode)){
-		return fill_struct(fstats, src, REGDIR);
+		return fill_struct(fstats, src, REGDIR, relativesrc);
 	}
 }
 
@@ -190,7 +190,7 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 	// Write file contents to server
 	if (file->size > 0){
 		char contents[file->size];
-		FILE *fp = fopen(file->path, "r");
+		FILE *fp = fopen(source, "r");
 		fread(contents, 1, file->size, fp);
 		int written;
 	    written = write(soc_child, contents, file->size);
@@ -210,7 +210,7 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		
 }
 
-int trace_directory(char *source, int soc, char *host, unsigned short port){
+int trace_directory(char *source, char *relativesrc, int soc, char *host, unsigned short port){
 	struct request *file;
 	DIR *dirp = opendir(source);
 	if (dirp == NULL) {
@@ -230,8 +230,13 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				strcat(fchildpath, dp->d_name);
 				lstat(fchildpath, &fchildstats);
 
+				char *frelativepath = malloc(strlen(relativesrc) + strlen(dp->d_name) + 2);
+				strcpy(frelativepath, relativesrc);
+				strcat(frelativepath, "/");
+				strcat(frelativepath, dp->d_name);
+
 				// File our struct with appropriate file info
-				file = handle_copy(fchildpath);
+				file = handle_copy(fchildpath, frelativepath);
 				// Determine if file should be updated on the server
 				server_res = transmit_struct(soc, file);
 				if (server_res == ERROR) {
@@ -251,7 +256,7 @@ int trace_directory(char *source, int soc, char *host, unsigned short port){
 				}else if (S_ISDIR(file->mode)) {
 
 					// Recursive call on this file path to process the subdirectory
-					trace_directory(fchildpath, soc, host, port);
+					trace_directory(fchildpath, frelativepath, soc, host, port);
 				}
 				// Deallocate memory for path as it is no longer used.
 				free(fchildpath);
@@ -281,13 +286,13 @@ int rcopy_client(char *source, char *host, unsigned short port){
 
 	establish_connection(&soc, host, port);
 
-	file = handle_copy(basename(source));
+	file = handle_copy(source, basename(source));
 	server_res = transmit_struct(soc, file);
 
 
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
-		return trace_directory(source, soc, host, port);
+		return trace_directory(source, basename(source), soc, host, port);
 	}else if (S_ISREG(file->mode)){
 		return transmit_data(source, file, host, port);
 	}
