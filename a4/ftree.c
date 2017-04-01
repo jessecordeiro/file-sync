@@ -32,20 +32,15 @@ int handle_file(struct sockname *filesrc){
 
 	// File/dir already exists in destination
 	if (lstat(destpath, &fstats_dest) != -1){
-
+		if (S_ISREG(fstats_dest.st_mode) != S_ISREG(filesrc->mode)){
+			perror("mismatch");
+			return ERROR;
 		// If file sizes are consistent, compare hash to determine
 		// if file should be overwritten
-		if (S_ISREG(filesrc->mode)){
+		} else if (S_ISREG(filesrc->mode)){
 			if (fstats_dest.st_size == filesrc->size){
 				FILE *filedest;
 				filedest = fopen(destpath, "rb");
-
-				// Emit error if there is a type mismatch
-				if (filedest == NULL){
-		    		perror("fopen");
-		    		return ERROR;
-		    	}else{
-
 		    		char hashdest[BLOCKSIZE];
 		    		strcpy(hashdest, hash(hashdest, filedest));
 		    		fclose(filedest);
@@ -56,8 +51,6 @@ int handle_file(struct sockname *filesrc){
 		    			return SENDFILE;
 		    		}
 		    		return OK;
-		    	}
-
 		    // If size differs, copy is performed
 			}else{
 				// Copy file contents to destination
@@ -159,9 +152,7 @@ int transmit_struct(int soc, struct request *file){
 
 	// If we are dealing with a regular file, we must check the server's response to
 	// determine if we need to send the contents of the file.
-	if (S_ISREG(file->mode)) {
-		read(soc, &response, sizeof(int));
-	}
+	read(soc, &response, sizeof(int));
 	return response;
 }
 
@@ -278,17 +269,16 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	file = handle_copy(basename(source));
 	server_res = transmit_struct(soc, file);
 
-
 	// If we are dealing with a directory, we must traverse its contents
-	if (S_ISDIR(file->mode)){
+	if (S_ISDIR(file->mode) && server_res != ERROR){
 		return trace_directory(source, soc, host, port);
-	}else{
+	}else if (S_ISREG(file->mode)){
 		return transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
-	return 0;
+	return 1;
 }
 
 /* 
@@ -463,7 +453,7 @@ void rcopy_server(unsigned short port){
 							// reset the state for this socket to allow for subdirectories/
 							// files in the directory to be copied.
 							files[i].state = AWAITING_TYPE;
-							// write(files[i].sock_fd, &response, sizeof(int));
+							write(files[i].sock_fd, &response, sizeof(int));
 						}
 					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
