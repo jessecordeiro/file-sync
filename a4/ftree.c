@@ -14,58 +14,55 @@
 #define MAX_BACKLOG 5
 
 struct sockname {
-    int sock_fd;
-    int type;
-    char path[MAXPATH];
-    int state;
-    mode_t mode;
-    char hash[BLOCKSIZE];
-    int size;
+	int sock_fd;
+	int type;
+	char path[MAXPATH];
+	int state;
+	mode_t mode;
+	char hash[BLOCKSIZE];
+	int size;
 };
-
 
 int handle_file(struct sockname *filesrc){
 	struct stat fstats_dest;
 	char *destpath = malloc(strlen(filesrc->path) + 1);
 	destpath[0] = '\0';
 	strcat(destpath, filesrc->path);
+	int action; 
 
 	// File/dir already exists in destination
 	if (lstat(destpath, &fstats_dest) != -1){
 
-		// If file sizes are consistent, compare hash to determine
-		// if file should be overwritten
+		// Emit error if there is a type mismatch
 		if (S_ISREG(filesrc->mode) && S_ISREG(fstats_dest.st_mode)){
+
+			// If file sizes are consistent, compare hash to determine
+			// if file should be overwritten
 			if (fstats_dest.st_size == filesrc->size){
 				FILE *filedest;
 				filedest = fopen(destpath, "rb");
-
-				// Emit error if there is a type mismatch
 				if (filedest == NULL){
-		    		perror("fopen");
-		    		return ERROR;
-		    	}else{
+					perror("fopen");
+					return ERROR;
+				}else{
+					char hashdest[BLOCKSIZE];
+					strcpy(hashdest, hash(hashdest, filedest));
+					fclose(filedest);
 
-		    		char hashdest[BLOCKSIZE];
-		    		strcpy(hashdest, hash(hashdest, filedest));
-		    		fclose(filedest);
+					// If hash is not the same, file in src has changed
+					// and must be rewritten to destination
+					if (check_hash(filesrc->hash, hashdest) != 0){
+						action = SENDFILE;
+					}
+					action = OK;
+				}
 
-		    		// If hash is not the same, file in src has changed
-		    		// and must be rewritten to destination
-		    		if (check_hash(filesrc->hash, hashdest) != 0){
-		    			return SENDFILE;
-		    		}
-		    		return OK;
-		    	}
-
-		    // If size differs, copy is performed
 			}else{
-				// Copy file contents to destination
-				return SENDFILE;
-
-			} // End of file size comparison
+				// If size differs, there must be a file transfer
+				action = SENDFILE;
+			}
 		}else if (S_ISDIR(filesrc->mode) && S_ISDIR(fstats_dest.st_mode)){
-			return OK;
+			action = OK;
 		}else{
 			return ERROR;
 		}
@@ -78,12 +75,11 @@ int handle_file(struct sockname *filesrc){
 			if (chmod(destpath, permissionsrc) != 0){
 				perror("chmod");
 			}
-
 		}
+		return action;
 
-	// Create file since it does not already exist in source
+	// Transfer file if it does not already exist in source
 	}else if (lstat(destpath, &fstats_dest) == -1){
-		// printf("doesn't exist %s\n", destpath);
 		return SENDFILE;
 	}else{
 		return ERROR;
@@ -93,16 +89,19 @@ int handle_file(struct sockname *filesrc){
 struct request *fill_struct(struct stat fstats, char *src, int type, char *relativesrc){
 	FILE *filesrc;
 	struct request *file = malloc(sizeof(struct request));
+
+	// Get the file type, path, mode and size (plus hash if reg file)
 	file->type = type;
 	strcpy(file->path, relativesrc);
 	file->mode = fstats.st_mode;
 	file->size = fstats.st_size;
-    filesrc = fopen(src, "r");
+	filesrc = fopen(src, "r");
 	if (filesrc == NULL){
-	    perror("fopen");
+		perror("fopen");
 	}else{
 		strcpy(file->hash, hash(file->hash, filesrc));
 	}
+
 	return file;
 }
 
@@ -159,10 +158,7 @@ int transmit_struct(int soc, struct request *file){
 	}
 	write(soc, &nl_size, sizeof(int));
 
-	// If we are dealing with a regular file, we must check the server's response to
-	// determine if we need to send the contents of the file.
-	// If file is a directory, we must determine if there was an error creating the
-	// directory on the server.
+	// Get the response from the server on whether the file/dir needs to be copied
 	read(soc, &response, sizeof(int));
 	return response;
 }
@@ -193,11 +189,9 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		FILE *fp = fopen(source, "r");
 		fread(contents, 1, file->size, fp);
 		int written;
-	    written = write(soc_child, contents, file->size);
-	    // printf("%s, fd: %d, written %d\n", file->path, soc_child, written);
+		written = write(soc_child, contents, file->size);
 		fclose(fp);
 	}
-
 
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
@@ -235,31 +229,33 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 				strcat(frelativepath, "/");
 				strcat(frelativepath, dp->d_name);
 
-				// File our struct with appropriate file info
-				file = handle_copy(fchildpath, frelativepath);
-				// Determine if file should be updated on the server
-				server_res = transmit_struct(soc, file);
-				if (server_res == ERROR) {
-					printf("Error transferring: %s\n", fchildpath);
-					exit = 1;
-				}
-				else if (server_res == SENDFILE && S_ISREG(file->mode)){
-					pid = fork();
-					if (pid < 0){
-						perror("fork");
-					} else if (pid == 0){
-						// After transmitting file info, we will transmit the data if server requests it
-						transmit_data(fchildpath, file, host, port);
-					} else{
-						forkcount += 1;
+				// Ignore links
+				if (S_ISREG(fchildstats.st_mode) || S_ISDIR(fchildstats.st_mode)) {
+					// File our struct with appropriate file info
+					file = handle_copy(fchildpath, frelativepath);
+					// Determine if file should be updated on the server
+					server_res = transmit_struct(soc, file);
+					if (server_res == ERROR) {
+						printf("Error transferring: %s\n", fchildpath);
+						exit = 1;
 					}
-				}else if (S_ISDIR(file->mode)) {
-
-					// Recursive call on this file path to process the subdirectory
-					trace_directory(fchildpath, frelativepath, soc, host, port);
+					else if (server_res == SENDFILE && S_ISREG(file->mode)){
+						pid = fork();
+						if (pid < 0){
+							perror("fork");
+						} else if (pid == 0){
+							// After transmitting file info, we will transmit the data if server requests it
+							transmit_data(fchildpath, file, host, port);
+						} else{
+							forkcount += 1;
+						}
+					}else if (S_ISDIR(file->mode)) {
+						// Recursive call on this file path to process the subdirectory
+						trace_directory(fchildpath, frelativepath, soc, host, port);
+					}
 				}
-				// Deallocate memory for path as it is no longer used.
 				free(fchildpath);
+				free(frelativepath);
 			}
 		}// End of processing contents of immediate directory
 		if (pid > 0){
@@ -283,25 +279,23 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 int rcopy_client(char *source, char *host, unsigned short port){
 	int soc, server_res;
 	struct request *file;
-
+	int exit = 1;
 	establish_connection(&soc, host, port);
 
 	file = handle_copy(source, basename(source));
 	server_res = transmit_struct(soc, file);
 
-
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
 		return trace_directory(source, basename(source), soc, host, port);
 	}else if (S_ISREG(file->mode)){
-		return transmit_data(source, file, host, port);
+		exit = transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
 
-	// This shouldn't be returned unless an occurs with transmit_struct
-	return 1;
+	return exit;
 }
 
 /* 
@@ -319,7 +313,7 @@ int setup(unsigned short port) {
 	// Make sure we can reuse the port immediately after the
 	// server terminates.
 	status = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR,
-	                  (const char *) &on, sizeof(on));
+					  (const char *) &on, sizeof(on));
 	if(status == -1) {
 		perror("setsockopt -- REUSEADDR");
 	}
@@ -357,9 +351,9 @@ void rcopy_server(unsigned short port){
 
 	int index;
 	for (index = 0; index < MAX_CONNECTIONS; index++) {
-        files[index].sock_fd = -1;
-        files[index].state = AWAITING_TYPE;
-    }
+		files[index].sock_fd = -1;
+		files[index].state = AWAITING_TYPE;
+	}
 
 	socket_fd = setup(port);
 	int max_fd = socket_fd;
@@ -368,21 +362,21 @@ void rcopy_server(unsigned short port){
 
 	while (1) {
 		listen_fds = all_fds;
-	    socklen = sizeof(peer);
+		socklen = sizeof(peer);
 
-	    int nready = select(max_fd + 1, &listen_fds, NULL, NULL, NULL);
-        if (nready == -1) {
-            perror("server: select");
-            exit(1);
-        }
+		int nready = select(max_fd + 1, &listen_fds, NULL, NULL, NULL);
+		if (nready == -1) {
+			perror("server: select");
+			exit(1);
+		}
 
-	    // If socket_fd is ready for I/O => new connection
-	    if (FD_ISSET(socket_fd, &listen_fds)){
+		// If socket_fd is ready for I/O => new connection
+		if (FD_ISSET(socket_fd, &listen_fds)){
 
-	    	// Note that we're passing in valid pointers for the second and third
-		    // arguments to accept here, so we can actually store and use client
-		    // information.
-	    	if ((client_fd = accept(socket_fd, (struct sockaddr *)&peer, &socklen)) < 0) {
+			// Note that we're passing in valid pointers for the second and third
+			// arguments to accept here, so we can actually store and use client
+			// information.
+			if ((client_fd = accept(socket_fd, (struct sockaddr *)&peer, &socklen)) < 0) {
 				perror("accept");
 			}else{
 				printf("New connection on port %d\n", ntohs(peer.sin_port));
@@ -394,24 +388,24 @@ void rcopy_server(unsigned short port){
 				// update its fields to reference the new client.
 				index = 0;
 				while (index < MAX_CONNECTIONS && files[index].sock_fd != -1) {
-			        index++;
-			    }
-			    files[index].sock_fd = client_fd;
-			    files[index].state = AWAITING_TYPE;
+					index++;
+				}
+				files[index].sock_fd = client_fd;
+				files[index].state = AWAITING_TYPE;
 
-			    // We must always update max_fd for the select call
+				// We must always update max_fd for the select call
 				if (client_fd > max_fd) {
-                	max_fd = client_fd;
-            	}
+					max_fd = client_fd;
+				}
 			}
-	    }
+		}
 
-	    // Check which client is ready to send information to our server
-	    int i;
-	    for (i = 0; i < MAX_CONNECTIONS; i++){
-	    	if (FD_ISSET(files[i].sock_fd, &listen_fds) && files[i].sock_fd > -1){
-		    	if (files[i].state == AWAITING_TYPE){
+		// Check which client is ready to send information to our server
+		int i;
+		for (i = 0; i < MAX_CONNECTIONS; i++){
+			if (FD_ISSET(files[i].sock_fd, &listen_fds) && files[i].sock_fd > -1){
 
+				if (files[i].state == AWAITING_TYPE){
 					// Sanity check to determine if client_fd needs to be removed
 					if (read(files[i].sock_fd, &type, sizeof(int)) == 0){
 						FD_CLR(client_fd, &all_fds);
@@ -419,10 +413,10 @@ void rcopy_server(unsigned short port){
 					}
 					files[i].type = ntohl(type);
 					files[i].state = AWAITING_PATH;
-		    	} else if (files[i].state == AWAITING_PATH){
+
+				} else if (files[i].state == AWAITING_PATH){
 					read(files[i].sock_fd, &(files[i].path), MAXPATH);
 					files[i].state = AWAITING_PERM;
-					// printf("fd: %d name: %s type: %d\n", files[i].sock_fd, files[i].path, files[i].type);
 
 				} else if (files[i].state == AWAITING_PERM){
 					read(files[i].sock_fd, &nl_mode, sizeof(int));
@@ -434,9 +428,11 @@ void rcopy_server(unsigned short port){
 					}else {
 						files[i].state = AWAITING_SIZE;
 					}
+
 				}else if (files[i].state == AWAITING_HASH){
 					read(files[i].sock_fd, &(files[i].hash), BLOCKSIZE);
 					files[i].state = AWAITING_SIZE;
+
 				} else if (files[i].state == AWAITING_SIZE){
 					read(files[i].sock_fd, &size, sizeof(int));
 					files[i].size = ntohl(size);
@@ -448,21 +444,8 @@ void rcopy_server(unsigned short port){
 					if (files[i].type != TRANSFILE){
 						response = handle_file(&files[i]);
 						if (S_ISREG(files[i].mode)){
-							if (response == SENDFILE){
-
-								// Tell client that file should be sent as it does not
-								// exist on the server.
 								write(files[i].sock_fd, &response, sizeof(int));
 								files[i].state = AWAITING_TYPE;
-
-							}else{
-
-								// If file does exist on the server, the client has
-								// nothing else to do, so we will remove the socket
-								// to allow future connections to reuse it.
-								write(files[i].sock_fd, &response, sizeof(int));
-							        files[i].state = AWAITING_TYPE;
-							}
 						} else if (S_ISDIR(files[i].mode)){
 							if (response == SENDFILE){
 
@@ -480,11 +463,10 @@ void rcopy_server(unsigned short port){
 							// reset the state for this socket to allow for subdirectories/
 							// files in the directory to be copied.
 							files[i].state = AWAITING_TYPE;
-							// write(files[i].sock_fd, &response, sizeof(int));
 						}
+
 					}else if (files[i].size > 0){
 						files[i].state = AWAITING_DATA;
-						// printf("%d %s %d\n", files[i].sock_fd, files[i].path, files[i].state);
 					}else{
 						FILE *fp = fopen(files[i].path, "w");
 						response = OK;
@@ -500,7 +482,7 @@ void rcopy_server(unsigned short port){
 						files[i].state = AWAITING_TYPE;
 					}
 					
-				} else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
+				}else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
 					int in, out, sock_index;
 					FILE *fp = fopen(files[i].path, "w");
 
@@ -526,11 +508,11 @@ void rcopy_server(unsigned short port){
 						if (files[i].sock_fd == max_fd){
 							sock_index = 0;
 							while (sock_index < MAX_CONNECTIONS) {
-						        if (files[sock_index].sock_fd > max_fd) {
-			                		max_fd = files[sock_index].sock_fd;
-			            		}
-			            		sock_index += 1;
-						    }
+								if (files[sock_index].sock_fd > max_fd) {
+									max_fd = files[sock_index].sock_fd;
+								}
+								sock_index += 1;
+							}
 						}
 						fclose(fp);
 					}else{
@@ -542,9 +524,8 @@ void rcopy_server(unsigned short port){
 					FD_CLR(files[i].sock_fd, &all_fds);
 
 				}
-		    }
-	    }
-	    
+			}
+		}
 	}
 	close(socket_fd);
 }
