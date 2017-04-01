@@ -286,15 +286,17 @@ int rcopy_client(char *source, char *host, unsigned short port){
 
 
 	// If we are dealing with a directory, we must traverse its contents
-	if (S_ISDIR(file->mode)){
+	if (S_ISDIR(file->mode) && server_res != ERROR){
 		return trace_directory(source, soc, host, port);
-	}else{
+	}else if (S_ISREG(file->mode)){
 		return transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
-	return 0;
+
+	// This shouldn't be returned unless an occurs with transmit_struct
+	return 1;
 }
 
 /* 
