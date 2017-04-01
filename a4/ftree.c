@@ -185,12 +185,26 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 
 	// Write file contents to server
 	if (file->size > 0){
+		int bytes_left = file->size;
+		int written = 0;
 		char contents[file->size];
 		FILE *fp = fopen(source, "r");
-		fread(contents, 1, file->size, fp);
-		int written;
-		written = write(soc_child, contents, file->size);
-		fclose(fp);
+	        fread(contents, 1, file->size, fp);
+                fclose(fp);
+		char *ptr = contents;
+		// Since we are only gauranteed MAXDATA bytes per read/write calls, 
+		// we must make more than one write call from the client to transer
+		// a file's contents if it exceeds MAXDATA bytes.
+		while (bytes_left > 0) {
+			if (bytes_left < MAXDATA) {
+                                written = write(soc_child, ptr, bytes_left);
+			} else {
+				written = write(soc_child, ptr, MAXDATA);
+			}
+			fseek(fp, ptr - contents, SEEK_SET);
+			ptr += written;
+			bytes_left -= written;
+		}
 	}
 
 	read(soc_child, &server_res, sizeof(int));
@@ -483,13 +497,25 @@ void rcopy_server(unsigned short port){
 					}
 					
 				}else if (files[i].type == TRANSFILE && files[i].state == AWAITING_DATA){
-					int in, out, sock_index;
+					int out, sock_index;
+					int in = 0;
 					FILE *fp = fopen(files[i].path, "w");
 
 					// If the file can be created, update its contents
 					if (fp != NULL){
-						char contents[MAXDATA] = {'\0'};
-						in = read(files[i].sock_fd, contents, files[i].size);
+						// Multiple read calls will need to be made if a file contains more than MAXDATA bytes.
+						char contents[files[i].size];
+						int recieved = 0;
+						char *ptr = contents;
+						while (in != files[i].size) {
+							if ((files[i].size - in) < MAXDATA) {
+								recieved = read(files[i].sock_fd, ptr, files[i].size - in);
+							} else {
+								recieved = read(files[i].sock_fd, ptr, MAXDATA);
+							}
+							ptr += recieved;
+							in += recieved;
+						}
 						contents[in] = '\0';
 
 						// If we are sure that we have read the entire file contents from 
