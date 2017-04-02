@@ -45,17 +45,18 @@ int handle_file(struct sockname *filesrc){
 					perror("fopen");
 					return ERROR;
 				}else{
-					char hashdest[BLOCKSIZE];
+					char hashdest[BLOCKSIZE] = {'\0'};
 					strcpy(hashdest, hash(hashdest, filedest));
-					fclose(filedest);
-
 					// If hash is not the same, file in src has changed
 					// and must be rewritten to destination
 					if (check_hash(filesrc->hash, hashdest) != 0){
 						action = SENDFILE;
+					} else {
+						action = OK;
 					}
-					action = OK;
+				
 				}
+	                        fclose(filedest);
 
 			}else{
 				// If size differs, there must be a file transfer
@@ -252,8 +253,7 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 					if (server_res == ERROR) {
 						printf("Error transferring: %s\n", fchildpath);
 						exit = 1;
-					}
-					else if (server_res == SENDFILE && S_ISREG(file->mode)){
+					}else if (server_res == SENDFILE && S_ISREG(file->mode)){
 						pid = fork();
 						if (pid < 0){
 							perror("fork");
@@ -293,16 +293,15 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 int rcopy_client(char *source, char *host, unsigned short port){
 	int soc, server_res;
 	struct request *file;
-	int exit = 1;
+	int exit = 0;
 	establish_connection(&soc, host, port);
 
 	file = handle_copy(source, basename(source));
 	server_res = transmit_struct(soc, file);
-
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
 		return trace_directory(source, basename(source), soc, host, port);
-	}else if (S_ISREG(file->mode)){
+	}else if (S_ISREG(file->mode) && server_res == SENDFILE){
 		exit = transmit_data(source, file, host, port);
 	}
 
