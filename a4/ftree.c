@@ -198,7 +198,7 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		// a file's contents if it exceeds MAXDATA bytes.
 		while (bytes_left > 0) {
 			if (bytes_left < MAXDATA) {
-                                written = write(soc_child, ptr, bytes_left);
+                written = write(soc_child, ptr, bytes_left);
 			} else {
 				written = write(soc_child, ptr, MAXDATA);
 			}
@@ -208,6 +208,7 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 		}
 	}
 
+	// After transmitting struct, read from socket to determine response from server
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
 		printf("Successfully transferred: %s\n", file->path);
@@ -232,13 +233,15 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 		int exit = 0;
 		while ((dp = readdir(dirp)) != NULL) {
 			if ((dp->d_name)[0] != '.') {
-				// Path is used to store the complete file path to the file
+
+				// fchildpath is used to store the complete file path to the file
 				char *fchildpath = malloc(strlen(source) + strlen(dp->d_name) + 2);
 				strcpy(fchildpath, source);
 				strcat(fchildpath, "/");
 				strcat(fchildpath, dp->d_name);
 				lstat(fchildpath, &fchildstats);
 
+				// frelativepath stores the relative path to the file
 				char *frelativepath = malloc(strlen(relativesrc) + strlen(dp->d_name) + 2);
 				strcpy(frelativepath, relativesrc);
 				strcat(frelativepath, "/");
@@ -272,6 +275,8 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 				free(frelativepath);
 			}
 		}// End of processing contents of immediate directory
+
+		// Wait on child processes before exiting to determine exit status of main client
 		if (pid > 0){
 			int status, i;
 			for (i = 0; i < forkcount; i++){
