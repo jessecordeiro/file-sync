@@ -425,9 +425,11 @@ void rcopy_server(unsigned short port){
 			if (FD_ISSET(files[i].sock_fd, &listen_fds) && files[i].sock_fd > -1){
 
 				if (files[i].state == AWAITING_TYPE){
-					// Sanity check to determine if client_fd needs to be removed
+
+					// Not really needed: Sanity check to determine if 
+					// client_fd needs to be removed.
 					if (read(files[i].sock_fd, &type, sizeof(int)) == 0){
-						FD_CLR(client_fd, &all_fds);
+						FD_CLR(files[i].sock_fd, &all_fds);
 						files[i].sock_fd = -1;
 					}
 					files[i].type = ntohl(type);
