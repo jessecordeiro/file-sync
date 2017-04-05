@@ -112,7 +112,7 @@ struct request *handle_copy(char *src, char *relativesrc){
 	lstat(src, &fstats);
 
 	// Omit regular files beginning with "."
-	if (S_ISREG(fstats.st_mode) && src[0] != '.') {
+	if (S_ISREG(fstats.st_mode)) {
 		return fill_struct(fstats, src, REGFILE, relativesrc);
 	}else if (S_ISDIR(fstats.st_mode)){
 		return fill_struct(fstats, src, REGDIR, relativesrc);
@@ -210,7 +210,6 @@ int transmit_data(char *source, struct request *file, char *host, unsigned short
 
 	read(soc_child, &server_res, sizeof(int));
 	if (server_res == OK){
-		printf("Successfully transferred: %s\n", file->path);
 		exit(0);
 	} else if (server_res == ERROR){
 		printf("Error transferring: %s\n", file->path);
@@ -300,14 +299,16 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	server_res = transmit_struct(soc, file);
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
-		return trace_directory(source, basename(source), soc, host, port);
+		exit = trace_directory(source, basename(source), soc, host, port);
 	}else if (S_ISREG(file->mode) && server_res == SENDFILE){
 		exit = transmit_data(source, file, host, port);
 	}
 
 	free(file);
 	close(soc);
-
+	if (server_res == ERROR) {
+		exit = 1;
+	}
 	return exit;
 }
 
