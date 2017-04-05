@@ -108,8 +108,12 @@ struct request *fill_struct(struct stat fstats, char *src, int type, char *relat
 
 struct request *handle_copy(char *src, char *relativesrc){
 	struct stat fstats;
-	struct request *dir_request;
-	lstat(src, &fstats);
+	struct request *errorRequest;
+	if (lstat(src, &fstats) == -1){
+		errorRequest = malloc(sizeof(struct request));
+		errorRequest->type = -1;
+		return errorRequest;
+	}
 
 	// Omit regular files beginning with "."
 	if (S_ISREG(fstats.st_mode)) {
@@ -147,6 +151,11 @@ int establish_connection(int *soc, char *host, unsigned short port){
 int transmit_struct(int soc, struct request *file){
 	int response = 0;
 	int nl_type, nl_mode, nl_size;
+
+	// If file does not exist, return error
+	if (file->type == -1){
+		return ERROR;
+	}
 	nl_type = htonl(file->type);
 	nl_mode = htonl(file->mode);
 	nl_size = htonl(file->size);
@@ -337,7 +346,7 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	close(soc);
 	if (server_res == ERROR) {
 		exitcode = 1;
-                printf("Error transferring: %s\n", source);
+        printf("Error transferring: %s\n", source);
 	}
 	return exitcode;
 }
