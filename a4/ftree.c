@@ -229,7 +229,7 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 		struct stat fchildstats;
 		int server_res, pid;
 		int forkcount = 0;
-		int exit = 0;
+		int exitcode = 0;
 		while ((dp = readdir(dirp)) != NULL) {
 			if ((dp->d_name)[0] != '.') {
 
@@ -254,7 +254,7 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 					server_res = transmit_struct(soc, file);
 					if (server_res == ERROR) {
 						printf("Error transferring: %s\n", fchildpath);
-						exit = 1;
+						exitcode = 1;
 					}else if (server_res == SENDFILE && S_ISREG(file->mode)){
 						pid = fork();
 						if (pid < 0){
@@ -267,7 +267,7 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 						}
 					}else if (S_ISDIR(file->mode)) {
 						// Recursive call on this file path to process the subdirectory
-						trace_directory(fchildpath, frelativepath, soc, host, port);
+						exitcode = trace_directory(fchildpath, frelativepath, soc, host, port);
 					}
 				}
 				free(fchildpath);
@@ -285,26 +285,26 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 				if (WIFEXITED(status)) {
 					char exitstatus = WEXITSTATUS(status);
 					if (exitstatus == 1){
-						exit = 1;
+						exitcode = 1;
 					}
 				}
 			}
 		}
-		return exit;
+		return exitcode;
 	}
 }
 
 int rcopy_client(char *source, char *host, unsigned short port){
 	int soc, server_res, pid;
 	struct request *file;
-	int exit = 0;
+	int exitcode = 0;
 	establish_connection(&soc, host, port);
 
 	file = handle_copy(source, basename(source));
 	server_res = transmit_struct(soc, file);
 	// If we are dealing with a directory, we must traverse its contents
 	if (S_ISDIR(file->mode) && server_res != ERROR){
-		exit = trace_directory(source, basename(source), soc, host, port);
+		exitcode = trace_directory(source, basename(source), soc, host, port);
 	}else if (S_ISREG(file->mode) && server_res == SENDFILE){
 		pid = fork();
 		if (pid < 0){
@@ -321,7 +321,7 @@ int rcopy_client(char *source, char *host, unsigned short port){
 			if (WIFEXITED(status)) {
 				char exitstatus = WEXITSTATUS(status);
 				if (exitstatus == 1){
-					exit = 1;
+					exitcode = 1;
 				}
 			}
 		}
@@ -330,9 +330,9 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	free(file);
 	close(soc);
 	if (server_res == ERROR) {
-		exit = 1;
+		exitcode = 1;
 	}
-	return exit;
+	return exitcode;
 }
 
 /* 
@@ -476,10 +476,6 @@ void rcopy_server(unsigned short port){
 					read(files[i].sock_fd, &size, sizeof(int));
 					files[i].size = ntohl(size);
 
-					// printf("File type: %d\n", files[i].type);
-					// printf("File path: %s\n", files[i].path);
-					// printf("File mode: %d\n", files[i].mode);
-					// printf("File size: %d bytes\n", files[i].size);
 					if (files[i].type != TRANSFILE){
 						response = handle_file(&files[i]);
 						if (S_ISREG(files[i].mode)){
