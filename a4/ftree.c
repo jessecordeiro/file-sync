@@ -295,7 +295,7 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 }
 
 int rcopy_client(char *source, char *host, unsigned short port){
-	int soc, server_res;
+	int soc, server_res, pid;
 	struct request *file;
 	int exit = 0;
 	establish_connection(&soc, host, port);
@@ -306,7 +306,25 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	if (S_ISDIR(file->mode) && server_res != ERROR){
 		exit = trace_directory(source, basename(source), soc, host, port);
 	}else if (S_ISREG(file->mode) && server_res == SENDFILE){
-		exit = transmit_data(source, file, host, port);
+		pid = fork();
+		if (pid < 0){
+			perror("fork");
+		} else if (pid == 0){
+			// After transmitting file info, we will transmit the data if server requests it
+			transmit_data(source, file, host, port);
+		} else{
+			// Parent process must wait for child process in order to get its exit code
+			int status;
+			if (wait(&status) == -1){
+				perror("wait");
+			}
+			if (WIFEXITED(status)) {
+				char exitstatus = WEXITSTATUS(status);
+				if (exitstatus == 1){
+					exit = 1;
+				}
+			}
+		}
 	}
 
 	free(file);
