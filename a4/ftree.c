@@ -266,8 +266,14 @@ int trace_directory(char *source, char *relativesrc, int soc, char *host, unsign
 							forkcount += 1;
 						}
 					}else if (S_ISDIR(file->mode)) {
+
 						// Recursive call on this file path to process the subdirectory
-						exitcode = trace_directory(fchildpath, frelativepath, soc, host, port);
+						int tempexitcode = trace_directory(fchildpath, frelativepath, soc, host, port);
+
+						// only update exit code if it is an error
+						if (tempexitcode == 1){
+							exitcode = tempexitcode;
+						}
 					}
 				}
 				free(fchildpath);
