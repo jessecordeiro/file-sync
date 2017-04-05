@@ -337,6 +337,7 @@ int rcopy_client(char *source, char *host, unsigned short port){
 	close(soc);
 	if (server_res == ERROR) {
 		exitcode = 1;
+                printf("Error transferring: %s\n", source);
 	}
 	return exitcode;
 }
